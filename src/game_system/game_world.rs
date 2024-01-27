@@ -149,7 +149,6 @@ impl GameWorld {
                         entity.isometry = isometry.clone();
                     }
                 }
-                _ => {}
             }
         }
     }

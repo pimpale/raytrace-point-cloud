@@ -119,16 +119,6 @@ fn build_scene(
         },
     );
 
-    // // add ground
-    // let blas_test_mesh = render_system::bvh::test_blas();
-    // world.add_entity(
-    //     4,
-    //     EntityCreationData {
-    //         mesh: blas_test_mesh,
-    //         isometry: Isometry3::identity(),
-    //     },
-    // );
-
     world
 }
 

@@ -74,7 +74,6 @@ impl GameWorld {
 
         assert!(device == memory_allocator.device());
 
-        let mut texture_atlas = vec![];
 
         let renderer = interactive_rendering::Renderer::new(
             surface.clone(),
@@ -82,7 +81,6 @@ impl GameWorld {
             command_buffer_allocator.clone(),
             memory_allocator.clone(),
             descriptor_set_allocator.clone(),
-            texture_atlas,
         );
 
         let scene = Rc::new(RefCell::new(Scene::new(

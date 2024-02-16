@@ -63,7 +63,7 @@ impl Manager for EgoControlsManager {
         let mut changes = vec![];
 
         let move_magnitude: f32 = 0.1;
-        let rotate_magnitude: f32 = 0.1;
+        let rotate_magnitude: f32 = 0.03;
         let jump_magnitude: f32 = 0.1;
 
         let mut target_linvel = Vector3::zeros();
@@ -91,7 +91,7 @@ impl Manager for EgoControlsManager {
         }
 
         let mut new_isometry = ego.isometry.clone();
-        new_isometry.translation.vector += target_linvel;
+        new_isometry.translation.vector += ego.isometry.rotation*target_linvel;
         new_isometry.rotation *=
             nalgebra::UnitQuaternion::from_axis_angle(&nalgebra::Vector3::y_axis(), target_angvel[1]);
 

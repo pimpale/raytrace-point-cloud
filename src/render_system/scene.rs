@@ -1,15 +1,20 @@
-use std::{collections::{BTreeMap, VecDeque}, fmt::Debug, sync::Arc};
+use std::{
+    collections::{BTreeMap, VecDeque},
+    fmt::Debug,
+    sync::Arc,
+};
 
 use nalgebra::{Isometry3, Matrix4};
 use vulkano::{
     acceleration_structure::{
-        AccelerationStructure, AccelerationStructureBuildGeometryInfo,
+        AabbPositions, AccelerationStructure, AccelerationStructureBuildGeometryInfo,
         AccelerationStructureBuildRangeInfo, AccelerationStructureBuildSizesInfo,
         AccelerationStructureBuildType, AccelerationStructureCreateInfo,
-        AccelerationStructureGeometries, AccelerationStructureGeometryInstancesData,
-        AccelerationStructureGeometryInstancesDataType, AccelerationStructureGeometryTrianglesData,
-        AccelerationStructureInstance, AccelerationStructureType, BuildAccelerationStructureFlags,
-        BuildAccelerationStructureMode, GeometryFlags,
+        AccelerationStructureGeometries, AccelerationStructureGeometryAabbsData,
+        AccelerationStructureGeometryInstancesData, AccelerationStructureGeometryInstancesDataType,
+        AccelerationStructureGeometryTrianglesData, AccelerationStructureInstance,
+        AccelerationStructureType, BuildAccelerationStructureFlags, BuildAccelerationStructureMode,
+        GeometryFlags,
     },
     buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer},
     command_buffer::{
@@ -23,7 +28,7 @@ use vulkano::{
     DeviceSize, Packed24_8,
 };
 
-pub struct Object<Vertex> {
+pub struct Object {
     isometry: Isometry3<f32>,
     vertex_buffer: Subbuffer<[Vertex]>,
     blas: Arc<AccelerationStructure>,
@@ -37,14 +42,14 @@ enum TopLevelAccelerationStructureState {
 }
 
 /// Corresponds to a TLAS
-pub struct Scene<K, Vertex> {
+pub struct Scene<K> {
     general_queue: Arc<Queue>,
     transfer_queue: Arc<Queue>,
     command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
     memory_allocator: Arc<dyn MemoryAllocator>,
-    objects: BTreeMap<K, Option<Object<Vertex>>>,
+    objects: BTreeMap<K, Option<Object>>,
     // we have to keep around old objects for n_swapchain_images frames to ensure that the TLAS is not in use
-    old_objects: VecDeque<Vec<Object<Vertex>>>,
+    old_objects: VecDeque<Vec<Object>>,
     n_swapchain_images: usize,
     // cached data from the last frame
     cached_tlas: Option<Arc<AccelerationStructure>>,
@@ -57,9 +62,8 @@ pub struct Scene<K, Vertex> {
 }
 
 #[allow(dead_code)]
-impl<K, Vertex> Scene<K, Vertex>
+impl<K> Scene<K>
 where
-    Vertex: vertex_input::Vertex + Default + Clone + BufferContents + Debug,
     K: Ord + Clone + std::cmp::Eq + std::hash::Hash,
 {
     pub fn new(
@@ -68,10 +72,7 @@ where
         memory_allocator: Arc<dyn MemoryAllocator>,
         command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
         n_swapchain_images: usize,
-    ) -> Scene<K, Vertex> {
-        // assert that the vertex type must have a field called position
-        assert!(Vertex::per_vertex().members.contains_key("position"));
-
+    ) -> Scene<K> {
         let command_buffer = AutoCommandBufferBuilder::primary(
             command_buffer_allocator.as_ref(),
             general_queue.queue_family_index(),
@@ -126,13 +127,6 @@ where
         match self.objects.get_mut(&key) {
             Some(Some(object)) => {
                 object.isometry = isometry;
-                let blas = create_bottom_level_acceleration_structure(
-                    &mut self.blas_command_buffer,
-                    self.memory_allocator.clone(),
-                    &[&object.vertex_buffer],
-                    isometry,
-                );
-                object.blas = blas;
                 if self.cached_tlas_state == TopLevelAccelerationStructureState::UpToDate {
                     self.cached_tlas_state = TopLevelAccelerationStructureState::NeedsUpdate;
                 }
@@ -386,66 +380,31 @@ fn create_top_level_acceleration_structure(
     )
 }
 
-fn create_bottom_level_acceleration_structure<T: BufferContents + vertex_input::Vertex>(
+fn create_bottom_level_acceleration_structure_aabb(
     builder: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
     memory_allocator: Arc<dyn MemoryAllocator>,
-    vertex_buffers: &[&Subbuffer<[T]>],
-    isometry: Isometry3<f32>,
+    aabb_buffer: &Subbuffer<[AabbPositions]>,
 ) -> Arc<AccelerationStructure> {
-    let description = T::per_vertex();
+    let primitive_count = aabb_buffer.len() as u32 / 3;
+    let aabbs = AccelerationStructureGeometryAabbsData {
+        flags: GeometryFlags::OPAQUE,
+        data: Some(aabb_buffer.clone().into_bytes()),
+        stride: std::mem::size_of::<AabbPositions>() as u32,
+        ..AccelerationStructureGeometryAabbsData::default()
+    };
+    let build_range_info = AccelerationStructureBuildRangeInfo {
+        primitive_count,
+        primitive_offset: 0,
+        first_vertex: 0,
+        transform_offset: 0,
+    };
 
-    assert_eq!(description.stride, std::mem::size_of::<T>() as u32);
-
-    let mut triangles = vec![];
-    let mut max_primitive_counts = vec![];
-    let mut build_range_infos = vec![];
-
-    let isometry_matrix: [[f32; 4]; 4] = Matrix4::from(isometry).transpose().into();
-
-    // create transform data
-    let transform_data = Buffer::from_data(
-        memory_allocator.clone(),
-        BufferCreateInfo {
-            usage: BufferUsage::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY
-                | BufferUsage::SHADER_DEVICE_ADDRESS,
-            ..Default::default()
-        },
-        AllocationCreateInfo {
-            memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
-                | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-            ..Default::default()
-        },
-        [isometry_matrix[0], isometry_matrix[1], isometry_matrix[2]],
-    )
-    .unwrap();
-
-    for &vertex_buffer in vertex_buffers {
-        let primitive_count = vertex_buffer.len() as u32 / 3;
-        triangles.push(AccelerationStructureGeometryTrianglesData {
-            flags: GeometryFlags::OPAQUE,
-            vertex_data: Some(vertex_buffer.clone().into_bytes()),
-            vertex_stride: description.stride,
-            max_vertex: vertex_buffer.len() as _,
-            index_data: None,
-            transform_data: Some(transform_data.clone()),
-            ..AccelerationStructureGeometryTrianglesData::new(
-                description.members.get("position").unwrap().format,
-            )
-        });
-        max_primitive_counts.push(primitive_count);
-        build_range_infos.push(AccelerationStructureBuildRangeInfo {
-            primitive_count,
-            primitive_offset: 0,
-            first_vertex: 0,
-            transform_offset: 0,
-        })
-    }
-
-    let geometries = AccelerationStructureGeometries::Triangles(triangles);
     let build_info = AccelerationStructureBuildGeometryInfo {
         flags: BuildAccelerationStructureFlags::PREFER_FAST_TRACE,
         mode: BuildAccelerationStructureMode::Build,
-        ..AccelerationStructureBuildGeometryInfo::new(geometries)
+        ..AccelerationStructureBuildGeometryInfo::new(AccelerationStructureGeometries::Aabbs(vec![
+            aabbs,
+        ]))
     };
 
     build_acceleration_structure(
@@ -453,8 +412,8 @@ fn create_bottom_level_acceleration_structure<T: BufferContents + vertex_input::
         memory_allocator,
         AccelerationStructureType::BottomLevel,
         build_info,
-        &max_primitive_counts,
-        build_range_infos,
+        &[primitive_count],
+        [build_range_info],
     )
 }
 

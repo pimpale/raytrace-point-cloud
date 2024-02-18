@@ -313,11 +313,11 @@ pub mod fs {
                 );
             }
 
-            //const uint SAMPLES_PER_PIXEL = 1;
-            const uint MAX_BOUNCES = 5;
+            const uint SAMPLES_PER_PIXEL = 1;
+            const uint MAX_BOUNCES = 3;
 
             void main() {
-                uint SAMPLES_PER_PIXEL = camera.samples;
+                // uint SAMPLES_PER_PIXEL = camera.samples;
                 
                 uint pixel_seed = camera.frame;
                 pixel_seed = murmur3_combinef(pixel_seed, in_uv.x);

@@ -211,3 +211,37 @@ pub fn screen_to_uv(e: Point2<f32>, extent: [u32; 2]) -> Point2<f32> {
     let y = e[1] / extent[1] as f32;
     Point2::new(2.0 * x - 1.0, 2.0 * y - 1.0)
 }
+
+pub struct PointCloudPoint {
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+} 
+
+
+impl ply_rs::ply::PropertyAccess for PointCloudPoint {
+    fn new() -> Self {
+        Self {
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+        }
+    }
+
+    fn set_property(&mut self, property: String, value: ply_rs::ply::Property) {
+        
+        fn as_float(property: ply_rs::ply::Property) -> f32 {
+            match property {
+                ply_rs::ply::Property::Float(v) => v,
+                _ => panic!("expected float"),
+            }
+        }
+        
+        match property.as_str() {
+            "x" => self.x = as_float(value),
+            "y" => self.y = as_float(value),
+            "z" => self.z = as_float(value),
+            _ => {},
+        }
+    }
+}

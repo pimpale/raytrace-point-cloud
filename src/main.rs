@@ -1,8 +1,10 @@
+use std::path;
 use std::sync::Arc;
 
 use game_system::game_world::{EntityCreationData, GameWorld};
 use nalgebra::{Isometry3, Point3, Vector3};
 
+use render_system::vertex::Vertex3D;
 use vulkano::command_buffer::allocator::StandardCommandBufferAllocator;
 use vulkano::descriptor_set::allocator::StandardDescriptorSetAllocator;
 use vulkano::swapchain::Surface;
@@ -15,6 +17,8 @@ use winit::event_loop::{ControlFlow, EventLoop};
 
 use winit::event::{Event, WindowEvent};
 use winit::window::WindowBuilder;
+
+use ply_rs;
 
 mod camera;
 mod game_system;
@@ -87,34 +91,54 @@ fn build_scene(
         },
     );
 
-    // add road
-    world.add_entity(
-        1,
-        EntityCreationData {
-            mesh: utils::flat_polyline(rd.clone(), 1.0, [0.5, 0.5, 0.5]),
-            isometry: Isometry3::identity(),
-        },
-    );
+    // // add road
+    // world.add_entity(
+    //     1,
+    //     EntityCreationData {
+    //         mesh: utils::flat_polyline(rd.clone(), 1.0, [0.5, 0.5, 0.5]),
+    //         isometry: Isometry3::identity(),
+    //     },
+    // );
 
-    // add road yellow line
-    world.add_entity(
-        2,
-        EntityCreationData {
-            mesh: utils::flat_polyline(
-                rd.iter().map(|v| v + Vector3::new(0.0, 0.1, 0.0)).collect(),
-                0.1,
-                [1.0, 1.0, 0.0],
-            ),
-            isometry: Isometry3::identity(),
-        },
-    );
+    // // add road yellow line
+    // world.add_entity(
+    //     2,
+    //     EntityCreationData {
+    //         mesh: utils::flat_polyline(
+    //             rd.iter().map(|v| v + Vector3::new(0.0, 0.1, 0.0)).collect(),
+    //             0.1,
+    //             [1.0, 1.0, 0.0],
+    //         ),
+    //         isometry: Isometry3::identity(),
+    //     },
+    // );
 
-    // add ground
-    let ground_mesh = utils::flat_polyline(g.clone(), 50.0, [0.5, 1.0, 0.5]);
+    // // add ground
+    // let ground_mesh = utils::flat_polyline(g.clone(), 50.0, [0.5, 1.0, 0.5]);
+    // world.add_entity(
+    //     3,
+    //     EntityCreationData {
+    //         mesh: ground_mesh,
+    //         isometry: Isometry3::identity(),
+    //     },
+    // );
+
+    // add teapot
+    let path = path::Path::new("./assets/point_cloud.ply");
+    let parser = ply_rs::parser::Parser::<utils::PointCloudPoint>::new();
+    let point_cloud = parser.read_ply(&mut std::fs::File::open(path).unwrap()).unwrap();
+
+    let mut vertexes = vec![];
+    for pcp in point_cloud.payload["vertex"].iter() {
+        vertexes.push(Vertex3D::new([pcp.x+0.1, -pcp.y, pcp.z],[0.0, 1.0, 0.2]));
+        vertexes.push(Vertex3D::new([pcp.x, -pcp.y+0.1, pcp.z],[0.0, 0.1, 0.2]));
+        vertexes.push(Vertex3D::new([pcp.x, -pcp.y, pcp.z+0.1],[0.0, 0.1, 1.0]));
+    }
+
     world.add_entity(
-        3,
+        4,
         EntityCreationData {
-            mesh: ground_mesh,
+            mesh: vertexes,
             isometry: Isometry3::identity(),
         },
     );

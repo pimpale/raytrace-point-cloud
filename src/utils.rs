@@ -212,6 +212,7 @@ pub fn screen_to_uv(e: Point2<f32>, extent: [u32; 2]) -> Point2<f32> {
     Point2::new(2.0 * x - 1.0, 2.0 * y - 1.0)
 }
 
+#[derive(Clone)]
 pub struct PointCloudPoint {
     pub x: f32,
     pub y: f32,

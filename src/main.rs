@@ -5,6 +5,8 @@ use game_system::game_world::{EntityCreationData, GameWorld};
 use nalgebra::{Isometry3, Point3, Vector3};
 
 use render_system::vertex::Vertex3D;
+use utils::PointCloudPoint;
+use vulkano::acceleration_structure::AabbPositions;
 use vulkano::command_buffer::allocator::StandardCommandBufferAllocator;
 use vulkano::descriptor_set::allocator::StandardDescriptorSetAllocator;
 use vulkano::swapchain::Surface;
@@ -86,8 +88,11 @@ fn build_scene(
     world.add_entity(
         0,
         EntityCreationData {
-            mesh: ego_mesh,
-            isometry: Isometry3::translation(0.0, 5.0, 0.0),
+            mesh: vec![AabbPositions {
+                min: [-0.5, -0.5, -0.5],
+                max: [0.5, 0.5, 0.5],
+            }],
+            isometry: Isometry3::translation(0.0, 0.0, 0.0),
         },
     );
 
@@ -124,16 +129,22 @@ fn build_scene(
     // );
 
     // add teapot
-    let path = path::Path::new("./assets/point_cloud.ply");
+    let path = path::Path::new("./assets/teapot.ply");
     let parser = ply_rs::parser::Parser::<utils::PointCloudPoint>::new();
-    let point_cloud = parser.read_ply(&mut std::fs::File::open(path).unwrap()).unwrap();
+    let point_cloud = parser
+        .read_ply(&mut std::fs::File::open(path).unwrap())
+        .unwrap();
 
     let mut vertexes = vec![];
     for pcp in point_cloud.payload["vertex"].iter() {
-        vertexes.push(Vertex3D::new([pcp.x+0.1, -pcp.y, pcp.z],[0.0, 1.0, 0.2]));
-        vertexes.push(Vertex3D::new([pcp.x, -pcp.y+0.1, pcp.z],[0.0, 0.1, 0.2]));
-        vertexes.push(Vertex3D::new([pcp.x, -pcp.y, pcp.z+0.1],[0.0, 0.1, 1.0]));
+        let PointCloudPoint { x, y, z, .. } = pcp;
+        let y = -y;
+        vertexes.push(AabbPositions {
+            min: [x - 0.1, y - 0.1, z - 0.1],
+            max: [x + 0.1, y + 0.1, z + 0.1],
+        });
     }
+    dbg!(vertexes.len());
 
     world.add_entity(
         4,

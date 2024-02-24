@@ -8,6 +8,7 @@ use nalgebra::Point3;
 use nalgebra::Vector3;
 
 use threadpool::ThreadPool;
+use vulkano::acceleration_structure::AabbPositions;
 use vulkano::command_buffer::allocator::StandardCommandBufferAllocator;
 use vulkano::descriptor_set::allocator::StandardDescriptorSetAllocator;
 use vulkano::device::DeviceOwned;
@@ -26,7 +27,7 @@ use crate::render_system::vertex::Vertex3D;
 
 pub struct EntityCreationData {
     // mesh (untransformed)
-    pub mesh: Vec<Vertex3D>,
+    pub mesh: Vec<AabbPositions>,
     // initial transformation
     // position and rotation in space
     pub isometry: Isometry3<f32>,
@@ -34,7 +35,7 @@ pub struct EntityCreationData {
 
 pub struct Entity {
     // mesh (untransformed)
-    pub mesh: Vec<Vertex3D>,
+    pub mesh: Vec<AabbPositions>,
     // transformation from origin
     pub isometry: Isometry3<f32>,
 }
@@ -48,7 +49,7 @@ pub enum WorldChange {
 pub struct GameWorld {
     entities: HashMap<u32, Entity>,
     ego_entity_id: u32,
-    scene: Rc<RefCell<Scene<u32, Vertex3D>>>,
+    scene: Rc<RefCell<Scene<u32>>>,
     camera: Rc<RefCell<Box<dyn InteractiveCamera>>>,
     surface: Arc<Surface>,
     renderer: interactive_rendering::Renderer,
@@ -74,7 +75,6 @@ impl GameWorld {
 
         assert!(device == memory_allocator.device());
 
-
         let renderer = interactive_rendering::Renderer::new(
             surface.clone(),
             general_queue.clone(),
@@ -97,9 +97,7 @@ impl GameWorld {
 
         let camera = Rc::new(RefCell::new(camera));
 
-
-        let ego_movement_manager =
-            EgoControlsManager::new(camera.clone());
+        let ego_movement_manager = EgoControlsManager::new(camera.clone());
 
         GameWorld {
             entities: HashMap::new(),
@@ -110,10 +108,7 @@ impl GameWorld {
             surface,
             events_since_last_step: vec![],
             changes_since_last_step: vec![],
-            managers: vec![
-                Box::new(ego_movement_manager),
-                Box::new(scene_manager),
-            ],
+            managers: vec![Box::new(ego_movement_manager), Box::new(scene_manager)],
         }
     }
 
@@ -182,24 +177,16 @@ impl GameWorld {
         // render to screen
         let ((eye, front, right, up), rendering_preferences) = {
             let camera = self.camera.borrow();
-            (
-                camera.eye_front_right_up(),
-                camera.rendering_preferences(),
-            )
+            (camera.eye_front_right_up(), camera.rendering_preferences())
         };
-        let (
-            top_level_acceleration_structure,
-            instance_vertex_buffer_addresses,
-            instance_transforms,
-            build_future,
-        ) = self.scene.borrow_mut().get_tlas();
-        
+        let (top_level_acceleration_structure, instance_data, build_future) =
+            self.scene.borrow_mut().get_tlas();
+
         // render to screen
         self.renderer.render(
             build_future,
             top_level_acceleration_structure,
-            instance_vertex_buffer_addresses,
-            instance_transforms,
+            instance_data,
             eye,
             front,
             right,

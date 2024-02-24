@@ -33,23 +33,20 @@ pub mod fs {
 
             layout(set = 0, binding = 0) uniform accelerationStructureEXT top_level_acceleration_structure;
             
-            struct Vertex {
-                vec3 position;
-                uint t;
-                vec2 uv;
+            layout(buffer_reference, buffer_reference_align=4, scalar) readonly buffer Vertex {
+                vec3 min;
+                vec3 max;
             };
 
-            layout(buffer_reference, buffer_reference_align=4, scalar) readonly buffer InstanceVertexBuffer {
-                Vertex vertexes[];
+            struct InstanceData {
+                // points to the device address of the vertex data for this instance
+                uint64_t vertex_buffer_addr;
+                // the transform of this instance
+                mat4x3 transform;
             };
 
-            layout(set = 0, binding = 1) readonly buffer InstanceVertexBufferAddresses {
-                // one uint64 per instance that points to the device address of the data for that instance
-                uint64_t instance_vertex_buffer_addrs[];
-            };
-
-            layout(set = 0, binding = 2, scalar) readonly buffer InstanceTransforms {
-                mat4 instance_transforms[];
+            layout(set = 0, binding = 1, scalar) readonly buffer InstanceDataBuffer {
+                InstanceData instance_data[];
             };
 
             layout(push_constant, scalar) uniform Camera {
@@ -146,8 +143,7 @@ pub mod fs {
             struct IntersectionInfo {
                 IntersectionCoordinateSystem hit_coords;
                 vec3 position;
-                vec2 uv;
-                uint t;
+                float t;
                 bool miss;
             };
 
@@ -166,11 +162,59 @@ pub mod fs {
                     t_max
                 );
 
+                float T;
+                uint instance_index;
+                uint prim_index;
+
                 // trace ray
-                while (rayQueryProceedEXT(ray_query));
-                
+                while (rayQueryProceedEXT(ray_query)) {
+                    // commit if intersection with aabb
+                    if(rayQueryGetIntersectionCandidateAABBOpaqueEXT(ray_query)) {
+                        vec3 candidate_object_space_origin = rayQueryGetIntersectionObjectRayOriginEXT(ray_query, false);
+                        vec3 candidate_object_space_direction = rayQueryGetIntersectionObjectRayDirectionEXT(ray_query, false);
+
+                        // get the primitive index and instance index
+                        uint candidate_prim_index = rayQueryGetIntersectionPrimitiveIndexEXT(ray_query, false);
+                        uint candidate_instance_index = rayQueryGetIntersectionInstanceIdEXT(ray_query, false);
+        
+                        InstanceData candidate_id = instance_data[candidate_instance_index];
+                        Vertex candidate_v = Vertex(candidate_id.vertex_buffer_addr)[candidate_prim_index];
+
+                        // r.dir is unit direction vector of ray
+                        vec3 dirfrac = vec3(
+                            1.0 / candidate_object_space_direction.x,
+                            1.0 / candidate_object_space_direction.y,
+                            1.0 / candidate_object_space_direction.z
+                        );
+                        // lb is the corner of AABB with minimal coordinates - left bottom, rt is maximal corner
+                        // r.org is origin of ray
+                        float t1 = (candidate_v.min.x - candidate_object_space_origin.x)*dirfrac.x;
+                        float t2 = (candidate_v.max.x - candidate_object_space_origin.x)*dirfrac.x;
+                        float t3 = (candidate_v.min.y - candidate_object_space_origin.y)*dirfrac.y;
+                        float t4 = (candidate_v.max.y - candidate_object_space_origin.y)*dirfrac.y;
+                        float t5 = (candidate_v.min.z - candidate_object_space_origin.z)*dirfrac.z;
+                        float t6 = (candidate_v.max.z - candidate_object_space_origin.z)*dirfrac.z;
+
+                        float tmin = max(max(min(t1, t2), min(t3, t4)), min(t5, t6));
+                        float tmax = min(min(max(t1, t2), max(t3, t4)), max(t5, t6));
+
+                        if(tmax < 0) {
+                            // rayQueryIgnoreIntersectionEXT(ray_query);
+                        } else if(tmin > tmax) {
+                            // rayQueryIgnoreIntersectionEXT(ray_query);
+                        } else {
+                            rayQueryGenerateIntersectionEXT(ray_query, tmin);
+                            if(tmin < T) {
+                                T = tmin;
+                                instance_index = candidate_instance_index;
+                                prim_index = candidate_prim_index;
+                            }
+                        }
+                    }
+                }
+
                 // if miss return miss
-                if(rayQueryGetIntersectionTypeEXT(ray_query, true) == gl_RayQueryCommittedIntersectionNoneEXT) {
+                if(rayQueryGetIntersectionTypeEXT(ray_query, true) != gl_RayQueryCommittedIntersectionGeneratedEXT) {
                     return IntersectionInfo(
                         IntersectionCoordinateSystem(
                             vec3(0.0),
@@ -178,55 +222,66 @@ pub mod fs {
                             vec3(0.0)
                         ),
                         vec3(0.0),
-                        vec2(0.0),
-                        0,
+                        0.0,
                         true
                     );
                 }
-                
-                uint prim_index = rayQueryGetIntersectionPrimitiveIndexEXT(ray_query, true);
-                uint instance_index = rayQueryGetIntersectionInstanceIdEXT(ray_query, true);
 
-                // get barycentric coordinates
-                vec2 bary = rayQueryGetIntersectionBarycentricsEXT(ray_query, true);
-                vec3 bary3 = vec3(1.0 - bary.x - bary.y,  bary.x, bary.y);
 
-                // get the instance data for this instance
-                InstanceVertexBuffer id = InstanceVertexBuffer(instance_vertex_buffer_addrs[instance_index]);
-                Vertex v0 = id.vertexes[prim_index*3 + 0];
-                Vertex v1 = id.vertexes[prim_index*3 + 1];
-                Vertex v2 = id.vertexes[prim_index*3 + 2];
+                InstanceData id = instance_data[instance_index];
+                Vertex v = Vertex(id.vertex_buffer_addr)[prim_index];
 
-                mat4 transform = instance_transforms[instance_index];
+                // float T = rayQueryGetIntersectionTEXT(ray_query, true);
+                // uint instance_id = rayQueryGetIntersectionInstanceIdEXT(ray_query, true);
+                // InstanceData id = instance_data[instance_id];
+                // Vertex v = Vertex(id.vertex_buffer_addr)[rayQueryGetIntersectionPrimitiveIndexEXT(ray_query, true)];
+                vec3 object_space_origin = rayQueryGetIntersectionObjectRayOriginEXT(ray_query, true);
+                vec3 object_space_direction = rayQueryGetIntersectionObjectRayDirectionEXT(ray_query, true);
 
-                // get the transformed positions
-                vec3 v0_p = (transform * vec4(v0.position, 1.0)).xyz;
-                vec3 v1_p = (transform * vec4(v1.position, 1.0)).xyz;
-                vec3 v2_p = (transform * vec4(v2.position, 1.0)).xyz;
+                vec3 object_space_intersection_position = object_space_origin + object_space_direction * T;
 
-                // get the texture coordinates
-                uint t = v0.t;
-                vec2 uv = v0.uv * bary3.x + v1.uv * bary3.y + v2.uv * bary3.z;
-                    
-                // get normal 
-                vec3 v0_1 = v1_p - v0_p;
-                vec3 v0_2 = v2_p - v0_p;
-                vec3 normal = cross(v0_1, v0_2);
-                vec3 tangent = v0_1;
+                vec3 aabb_center = 0.5*(v.max + v.min);
+
+                // get position of the intersection in object space, assuming the aabb is a cube
+                vec3 aabb_space_intersection_position = (object_space_intersection_position - 0.5*aabb_center) / (v.max - v.min);
+                vec3 aabb_space_intersection_position_abs = abs(aabb_space_intersection_position);
+
+                // these three values are points that are displaced from the origin (in aabb space) point by 1 unit in the normal, tangent, and bitangent directions
+                vec3 aabb_space_normal = vec3(0.0);
+                vec3 aabb_space_tangent = vec3(0.0);
+                if(aabb_space_intersection_position_abs.x > aabb_space_intersection_position_abs.y && aabb_space_intersection_position_abs.x > aabb_space_intersection_position_abs.z) {
+                    aabb_space_normal = vec3(sign(aabb_space_intersection_position.x), 0.0, 0.0);
+                    aabb_space_tangent = vec3(0.0, 0.0, 1.0);
+                } else if(aabb_space_intersection_position_abs.y > aabb_space_intersection_position_abs.z) {
+                    aabb_space_normal = vec3(0.0, sign(aabb_space_intersection_position.y), 0.0);
+                    aabb_space_tangent = vec3(0.0, 0.0, 1.0);
+                } else {
+                    aabb_space_normal = vec3(0.0, 0.0, sign(aabb_space_intersection_position.z));
+                    aabb_space_tangent = vec3(1.0, 0.0, 0.0);
+                }
+
+                vec3 object_space_normal = aabb_space_normal*(v.max - v.min) + aabb_center;
+                vec3 object_space_tangent = aabb_space_tangent*(v.max - v.min) + aabb_center;
+
+                // transform the face center into world space
+                vec3 world_space_aabb_center = (id.transform * vec4(aabb_center, 1.0)).xyz;
+                vec3 world_space_normal = (id.transform * vec4(object_space_normal, 1.0)).xyz;
+                vec3 world_space_tangent = (id.transform * vec4(object_space_tangent, 1.0)).xyz;
+
+                vec3 normal = normalize(world_space_normal - world_space_aabb_center);
+                vec3 tangent = normalize(world_space_tangent - world_space_aabb_center);
                 vec3 bitangent = cross(normal, tangent);
 
-                // get position
-                vec3 position = v0_p * bary3.x + v1_p * bary3.y + v2_p * bary3.z;
+                vec3 intersection_position = origin + direction * T;
 
                 return IntersectionInfo(
                     IntersectionCoordinateSystem(
-                        normalize(normal),
-                        normalize(tangent),
-                        normalize(bitangent)
+                        normal,
+                        tangent,
+                        bitangent
                     ),
-                    position,
-                    uv,
-                    t,
+                    intersection_position,
+                    T,
                     false
                 );
             }
@@ -242,7 +297,7 @@ pub mod fs {
 
             BounceInfo doBounce(vec3 origin, vec3 direction, IntersectionInfo info, uint seed) {
                 if(info.miss) {
-                    vec3 sky_emissivity = vec3(20.0);
+                    vec3 sky_emissivity = vec3(5.0);
                     vec3 sky_reflectivity = vec3(0.0);
                     return BounceInfo(
                         sky_emissivity,
@@ -260,9 +315,9 @@ pub mod fs {
 
                 float scatter_pdf_over_ray_pdf;
 
-                vec3 reflectivity = vec3(0.5, 0.5, 0.5);
+                vec3 reflectivity = vec3(0.0);
                 float alpha = 1.0;
-                vec3 emissivity = vec3(0.0, 0.0, 0.0);
+                vec3 emissivity = vec3(info.t / 5.0);
                 float metallicity = 0.0;
 
                 // decide whether to do specular (0), transmissive (1), or lambertian (2) scattering
@@ -314,7 +369,7 @@ pub mod fs {
             }
 
             const uint SAMPLES_PER_PIXEL = 1;
-            const uint MAX_BOUNCES = 3;
+            const uint MAX_BOUNCES = 2;
 
             void main() {
                 // uint SAMPLES_PER_PIXEL = camera.samples;

@@ -4,7 +4,7 @@ use std::{
     sync::Arc,
 };
 
-use nalgebra::{Isometry3, Matrix4};
+use nalgebra::{Isometry3, Matrix3x4, Matrix4};
 use vulkano::{
     acceleration_structure::{
         AabbPositions, AccelerationStructure, AccelerationStructureBuildGeometryInfo,
@@ -28,16 +28,17 @@ use vulkano::{
     DeviceSize, Packed24_8,
 };
 
+use super::vertex::InstanceData;
+
 pub struct Object {
     isometry: Isometry3<f32>,
-    vertex_buffer: Subbuffer<[Vertex]>,
+    vertex_buffer: Subbuffer<[AabbPositions]>,
     blas: Arc<AccelerationStructure>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TopLevelAccelerationStructureState {
     UpToDate,
-    NeedsUpdate,
     NeedsRebuild,
 }
 
@@ -53,8 +54,7 @@ pub struct Scene<K> {
     n_swapchain_images: usize,
     // cached data from the last frame
     cached_tlas: Option<Arc<AccelerationStructure>>,
-    cached_instance_vertex_buffer_addresses: Option<Subbuffer<[u64]>>,
-    cached_instance_transforms: Option<Subbuffer<[[[f32; 4]; 4]]>>,
+    cached_instance_data: Option<Subbuffer<[InstanceData]>>,
     // last frame state
     cached_tlas_state: TopLevelAccelerationStructureState,
     // command buffer all building commands are submitted to
@@ -89,26 +89,24 @@ where
             old_objects: VecDeque::from([vec![]]),
             n_swapchain_images,
             cached_tlas: None,
-            cached_instance_vertex_buffer_addresses: None,
-            cached_instance_transforms: None,
+            cached_instance_data: None,
             cached_tlas_state: TopLevelAccelerationStructureState::NeedsRebuild,
             blas_command_buffer: command_buffer,
         }
     }
 
     // adds a new object to the scene with the given isometry
-    pub fn add_object(&mut self, key: K, object: &Vec<Vertex>, isometry: Isometry3<f32>) {
+    pub fn add_object(&mut self, key: K, object: &Vec<AabbPositions>, isometry: Isometry3<f32>) {
         if object.len() == 0 {
             self.objects.insert(key, None);
             return;
         }
 
         let vertex_buffer = blas_vertex_buffer(self.memory_allocator.clone(), [object]);
-        let blas = create_bottom_level_acceleration_structure(
+        let blas = create_bottom_level_acceleration_structure_aabb(
             &mut self.blas_command_buffer,
             self.memory_allocator.clone(),
-            &[&vertex_buffer],
-            isometry,
+            &vertex_buffer,
         );
 
         self.objects.insert(
@@ -128,7 +126,7 @@ where
             Some(Some(object)) => {
                 object.isometry = isometry;
                 if self.cached_tlas_state == TopLevelAccelerationStructureState::UpToDate {
-                    self.cached_tlas_state = TopLevelAccelerationStructureState::NeedsUpdate;
+                    self.cached_tlas_state = TopLevelAccelerationStructureState::NeedsRebuild;
                 }
             }
             Some(None) => {}
@@ -157,40 +155,12 @@ where
         &mut self,
     ) -> (
         Arc<AccelerationStructure>,
-        Subbuffer<[u64]>,
-        Subbuffer<[[[f32; 4]; 4]]>,
+        Subbuffer<[InstanceData]>,
         Box<dyn GpuFuture>,
     ) {
-        // need to update instance vertex buffer addresses if an object was added or removed
-        if self.cached_tlas_state == TopLevelAccelerationStructureState::NeedsRebuild {
-            let instance_vertex_buffer_addresses = self
-                .objects
-                .values()
-                .flatten()
-                .map(|object| object.vertex_buffer.device_address().unwrap().get())
-                .collect::<Vec<_>>();
-
-            self.cached_instance_vertex_buffer_addresses = Some(
-                Buffer::from_iter(
-                    self.memory_allocator.clone(),
-                    BufferCreateInfo {
-                        usage: BufferUsage::SHADER_DEVICE_ADDRESS | BufferUsage::STORAGE_BUFFER,
-                        ..Default::default()
-                    },
-                    AllocationCreateInfo {
-                        memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
-                            | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-                        ..Default::default()
-                    },
-                    instance_vertex_buffer_addresses,
-                )
-                .unwrap(),
-            );
-        }
-
         // rebuild the instance transforms buffer if any object was moved, added, or removed
         if self.cached_tlas_state != TopLevelAccelerationStructureState::UpToDate {
-            let instance_transforms = Buffer::from_iter(
+            let instance_data = Buffer::from_iter(
                 self.memory_allocator.clone(),
                 BufferCreateInfo {
                     usage: BufferUsage::STORAGE_BUFFER,
@@ -204,13 +174,25 @@ where
                 self.objects
                     .values()
                     .flatten()
-                    .map(|Object { isometry, .. }| {
-                        <[[f32; 4]; 4]>::from(Matrix4::from(isometry.clone()))
-                    })
+                    .map(
+                        |Object {
+                             isometry,
+                             vertex_buffer,
+                             ..
+                         }| InstanceData {
+                            transform: {
+                                let mat4: Matrix4<f32> = isometry.clone().into();
+                                let mat3x4: Matrix3x4<f32> = mat4.fixed_view::<3, 4>(0, 0).into();
+                                mat3x4.into()
+                            },
+                            vertex_buffer_addr: vertex_buffer.device_address().unwrap().get(),
+                        },
+                    )
                     .collect::<Vec<_>>(),
             )
             .unwrap();
-            self.cached_instance_transforms = Some(instance_transforms);
+
+            self.cached_instance_data = Some(instance_data);
         }
 
         let future = match self.cached_tlas_state {
@@ -250,7 +232,9 @@ where
                         .objects
                         .values()
                         .flatten()
-                        .map(|Object { blas, .. }| blas as &AccelerationStructure)
+                        .map(|Object { blas, isometry, .. }| {
+                            (blas as &AccelerationStructure, isometry)
+                        })
                         .collect::<Vec<_>>(),
                 );
 
@@ -275,10 +259,7 @@ where
         // return the tlas
         return (
             self.cached_tlas.clone().unwrap(),
-            self.cached_instance_vertex_buffer_addresses
-                .clone()
-                .unwrap(),
-            self.cached_instance_transforms.clone().unwrap(),
+            self.cached_instance_data.clone().unwrap(),
             future,
         );
     }
@@ -318,16 +299,20 @@ where
 fn create_top_level_acceleration_structure(
     builder: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
     memory_allocator: Arc<dyn MemoryAllocator>,
-    bottom_level_acceleration_structures: &[&AccelerationStructure],
+    bottom_level_acceleration_structures: &[(&AccelerationStructure, &Isometry3<f32>)],
 ) -> Arc<AccelerationStructure> {
     let instances = bottom_level_acceleration_structures
         .iter()
         .map(
-            |&bottom_level_acceleration_structure| AccelerationStructureInstance {
+            |(bottom_level_acceleration_structure, &isometry)| AccelerationStructureInstance {
                 instance_shader_binding_table_record_offset_and_flags: Packed24_8::new(0, 0),
                 acceleration_structure_reference: bottom_level_acceleration_structure
                     .device_address()
                     .get(),
+                transform: {
+                    let isometry_matrix: [[f32; 4]; 4] = Matrix4::from(isometry).transpose().into();
+                    [isometry_matrix[0], isometry_matrix[1], isometry_matrix[2]]
+                },
                 ..Default::default()
             },
         )
@@ -385,7 +370,7 @@ fn create_bottom_level_acceleration_structure_aabb(
     memory_allocator: Arc<dyn MemoryAllocator>,
     aabb_buffer: &Subbuffer<[AabbPositions]>,
 ) -> Arc<AccelerationStructure> {
-    let primitive_count = aabb_buffer.len() as u32 / 3;
+    let primitive_count = aabb_buffer.len() as u32;
     let aabbs = AccelerationStructureGeometryAabbsData {
         flags: GeometryFlags::OPAQUE,
         data: Some(aabb_buffer.clone().into_bytes()),

@@ -162,9 +162,23 @@ pub mod fs {
                     t_max
                 );
 
-                float T;
-                uint instance_index;
-                uint prim_index;
+                // we have to pack all of our data to work around a bizzare bug in Nvidia's ray tracing implementation
+                // basically, we suffer from a  CTX SWITCH TIMEOUT if we assign more than one variable in the while loop
+                // also, the ray query does not pick the closest intersection, so we have to do that manually
+                mat3 packed_data = mat3(
+                    vec3(
+                        // minimum t
+                        t_max,
+                        // instance index
+                        0.0,
+                        // primitive index
+                        0.0
+                    ),
+                    // normal
+                    vec3(0.0),
+                    // tangent
+                    vec3(0.0)
+                );
 
                 // trace ray
                 while (rayQueryProceedEXT(ray_query)) {
@@ -180,34 +194,44 @@ pub mod fs {
                         InstanceData candidate_id = instance_data[candidate_instance_index];
                         Vertex candidate_v = Vertex(candidate_id.vertex_buffer_addr)[candidate_prim_index];
 
-                        // r.dir is unit direction vector of ray
-                        vec3 dirfrac = vec3(
-                            1.0 / candidate_object_space_direction.x,
-                            1.0 / candidate_object_space_direction.y,
-                            1.0 / candidate_object_space_direction.z
-                        );
-                        // lb is the corner of AABB with minimal coordinates - left bottom, rt is maximal corner
-                        // r.org is origin of ray
-                        float t1 = (candidate_v.min.x - candidate_object_space_origin.x)*dirfrac.x;
-                        float t2 = (candidate_v.max.x - candidate_object_space_origin.x)*dirfrac.x;
-                        float t3 = (candidate_v.min.y - candidate_object_space_origin.y)*dirfrac.y;
-                        float t4 = (candidate_v.max.y - candidate_object_space_origin.y)*dirfrac.y;
-                        float t5 = (candidate_v.min.z - candidate_object_space_origin.z)*dirfrac.z;
-                        float t6 = (candidate_v.max.z - candidate_object_space_origin.z)*dirfrac.z;
+                        vec3 inverse_dir = 1.0 / candidate_object_space_direction;
+                        vec3 tbot = inverse_dir * (candidate_v.min - candidate_object_space_origin);
+                        vec3 ttop = inverse_dir * (candidate_v.max - candidate_object_space_origin);
+                        vec3 tmin = min(ttop, tbot);
+                        vec3 tmax = max(ttop, tbot);
+                        vec2 traverse = max(tmin.xx, tmin.yz);
+                        float traverselow = max(traverse.x, traverse.y);
+                        traverse = min(tmax.xx, tmax.yz);
+                        float traversehi = min(traverse.x, traverse.y);
 
-                        float tmin = max(max(min(t1, t2), min(t3, t4)), min(t5, t6));
-                        float tmax = min(min(max(t1, t2), max(t3, t4)), max(t5, t6));
+                        if(traversehi > max(traverselow, 0.0)) {
+                            rayQueryGenerateIntersectionEXT(ray_query, traverselow);
+                            if(traverselow < packed_data[0][0]) {
 
-                        if(tmax < 0) {
-                            // rayQueryIgnoreIntersectionEXT(ray_query);
-                        } else if(tmin > tmax) {
-                            // rayQueryIgnoreIntersectionEXT(ray_query);
-                        } else {
-                            rayQueryGenerateIntersectionEXT(ray_query, tmin);
-                            if(tmin < T) {
-                                T = tmin;
-                                instance_index = candidate_instance_index;
-                                prim_index = candidate_prim_index;
+                                vec3 boxctr = (candidate_v.min + candidate_v.max) / 2.0;
+
+                                vec3 box_hit = boxctr - (candidate_object_space_origin + (traverselow * candidate_object_space_direction));
+                                vec3 box_intersect_normal = -box_hit / max(max(abs(box_hit.x), abs(box_hit.y)), abs(box_hit.z));
+                                box_intersect_normal = clamp(box_intersect_normal, vec3(-1.0), vec3(1.0));
+                                box_intersect_normal = normalize(trunc(box_intersect_normal * 1.00001f));
+
+                                // recall that the normal transformation matrix is the transpose of the inverse of the object to world matrix
+                                mat4x3 objectToWorldInverse = rayQueryGetIntersectionWorldToObjectEXT(ray_query, false);
+                                
+                                vec3 normal = normalize((box_intersect_normal * objectToWorldInverse).xyz);
+
+                                vec3 tangent;
+                                if(cross(normal, vec3(0.0, 1.0, 0.0)) == vec3(0.0)) {
+                                    tangent = vec3(1.0, 0.0, 0.0);
+                                } else {
+                                    tangent = normalize(cross(normal, vec3(0.0, 1.0, 0.0)));
+                                }
+
+                                packed_data = mat3(
+                                    vec3(traverselow, uintBitsToFloat(candidate_instance_index), uintBitsToFloat(candidate_prim_index)),
+                                    normal,
+                                    tangent
+                                );
                             }
                         }
                     }
@@ -227,49 +251,10 @@ pub mod fs {
                     );
                 }
 
+                float T = packed_data[0][0];
 
-                InstanceData id = instance_data[instance_index];
-                Vertex v = Vertex(id.vertex_buffer_addr)[prim_index];
-
-                // float T = rayQueryGetIntersectionTEXT(ray_query, true);
-                // uint instance_id = rayQueryGetIntersectionInstanceIdEXT(ray_query, true);
-                // InstanceData id = instance_data[instance_id];
-                // Vertex v = Vertex(id.vertex_buffer_addr)[rayQueryGetIntersectionPrimitiveIndexEXT(ray_query, true)];
-                vec3 object_space_origin = rayQueryGetIntersectionObjectRayOriginEXT(ray_query, true);
-                vec3 object_space_direction = rayQueryGetIntersectionObjectRayDirectionEXT(ray_query, true);
-
-                vec3 object_space_intersection_position = object_space_origin + object_space_direction * T;
-
-                vec3 aabb_center = 0.5*(v.max + v.min);
-
-                // get position of the intersection in object space, assuming the aabb is a cube
-                vec3 aabb_space_intersection_position = (object_space_intersection_position - 0.5*aabb_center) / (v.max - v.min);
-                vec3 aabb_space_intersection_position_abs = abs(aabb_space_intersection_position);
-
-                // these three values are points that are displaced from the origin (in aabb space) point by 1 unit in the normal, tangent, and bitangent directions
-                vec3 aabb_space_normal = vec3(0.0);
-                vec3 aabb_space_tangent = vec3(0.0);
-                if(aabb_space_intersection_position_abs.x > aabb_space_intersection_position_abs.y && aabb_space_intersection_position_abs.x > aabb_space_intersection_position_abs.z) {
-                    aabb_space_normal = vec3(sign(aabb_space_intersection_position.x), 0.0, 0.0);
-                    aabb_space_tangent = vec3(0.0, 0.0, 1.0);
-                } else if(aabb_space_intersection_position_abs.y > aabb_space_intersection_position_abs.z) {
-                    aabb_space_normal = vec3(0.0, sign(aabb_space_intersection_position.y), 0.0);
-                    aabb_space_tangent = vec3(0.0, 0.0, 1.0);
-                } else {
-                    aabb_space_normal = vec3(0.0, 0.0, sign(aabb_space_intersection_position.z));
-                    aabb_space_tangent = vec3(1.0, 0.0, 0.0);
-                }
-
-                vec3 object_space_normal = aabb_space_normal*(v.max - v.min) + aabb_center;
-                vec3 object_space_tangent = aabb_space_tangent*(v.max - v.min) + aabb_center;
-
-                // transform the face center into world space
-                vec3 world_space_aabb_center = (id.transform * vec4(aabb_center, 1.0)).xyz;
-                vec3 world_space_normal = (id.transform * vec4(object_space_normal, 1.0)).xyz;
-                vec3 world_space_tangent = (id.transform * vec4(object_space_tangent, 1.0)).xyz;
-
-                vec3 normal = normalize(world_space_normal - world_space_aabb_center);
-                vec3 tangent = normalize(world_space_tangent - world_space_aabb_center);
+                vec3 normal = packed_data[1];
+                vec3 tangent = packed_data[2];
                 vec3 bitangent = cross(normal, tangent);
 
                 vec3 intersection_position = origin + direction * T;
@@ -315,9 +300,9 @@ pub mod fs {
 
                 float scatter_pdf_over_ray_pdf;
 
-                vec3 reflectivity = vec3(0.0);
+                vec3 reflectivity = vec3(0.5);
                 float alpha = 1.0;
-                vec3 emissivity = vec3(info.t / 5.0);
+                vec3 emissivity = vec3(0.0);
                 float metallicity = 0.0;
 
                 // decide whether to do specular (0), transmissive (1), or lambertian (2) scattering

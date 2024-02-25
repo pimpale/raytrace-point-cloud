@@ -89,8 +89,8 @@ fn build_scene(
         0,
         EntityCreationData {
             mesh: vec![AabbPositions {
-                min: [-0.5, -0.5, -0.5],
-                max: [0.5, 0.5, 0.5],
+                min: [-0.5, -1., -2.],
+                max: [0.5, 1., 2.],
             }],
             isometry: Isometry3::translation(0.0, 0.0, 0.0),
         },
@@ -129,19 +129,17 @@ fn build_scene(
     // );
 
     // add teapot
-    let path = path::Path::new("./assets/teapot.ply");
+    let path = path::Path::new("./assets/point_cloud.ply");
     let parser = ply_rs::parser::Parser::<utils::PointCloudPoint>::new();
     let point_cloud = parser
         .read_ply(&mut std::fs::File::open(path).unwrap())
         .unwrap();
 
     let mut vertexes = vec![];
-    for pcp in point_cloud.payload["vertex"].iter() {
-        let PointCloudPoint { x, y, z, .. } = pcp;
-        let y = -y;
+    for PointCloudPoint { scale, position } in point_cloud.payload["vertex"].iter() {
         vertexes.push(AabbPositions {
-            min: [x - 0.1, y - 0.1, z - 0.1],
-            max: [x + 0.1, y + 0.1, z + 0.1],
+            min: (position.coords - 0.01*scale).into(),
+            max: (position.coords + 0.01*scale).into(),
         });
     }
     dbg!(vertexes.len());

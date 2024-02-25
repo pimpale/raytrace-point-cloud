@@ -211,6 +211,7 @@ pub mod fs {
                                 vec3 boxctr = (candidate_v.min + candidate_v.max) / 2.0;
 
                                 vec3 box_hit = boxctr - (candidate_object_space_origin + (traverselow * candidate_object_space_direction));
+                                box_hit /= (candidate_v.max - candidate_v.min);
                                 vec3 box_intersect_normal = -box_hit / max(max(abs(box_hit.x), abs(box_hit.y)), abs(box_hit.z));
                                 box_intersect_normal = clamp(box_intersect_normal, vec3(-1.0), vec3(1.0));
                                 box_intersect_normal = normalize(trunc(box_intersect_normal * 1.00001f));
@@ -300,9 +301,9 @@ pub mod fs {
 
                 float scatter_pdf_over_ray_pdf;
 
-                vec3 reflectivity = vec3(0.5);
+                vec3 reflectivity = vec3(0.0);
                 float alpha = 1.0;
-                vec3 emissivity = vec3(0.0);
+                vec3 emissivity = vec3(float(info.instance_index > 0.0) * 5.0);
                 float metallicity = 0.0;
 
                 // decide whether to do specular (0), transmissive (1), or lambertian (2) scattering

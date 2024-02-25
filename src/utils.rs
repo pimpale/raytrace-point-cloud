@@ -214,18 +214,16 @@ pub fn screen_to_uv(e: Point2<f32>, extent: [u32; 2]) -> Point2<f32> {
 
 #[derive(Clone)]
 pub struct PointCloudPoint {
-    pub x: f32,
-    pub y: f32,
-    pub z: f32,
+    pub position: Point3<f32>,
+    pub scale: Vector3<f32>
 } 
 
 
 impl ply_rs::ply::PropertyAccess for PointCloudPoint {
     fn new() -> Self {
         Self {
-            x: 0.0,
-            y: 0.0,
-            z: 0.0,
+            position: Point3::new(0.0, 0.0, 0.0),
+            scale: Vector3::new(1.0, 1.0, 1.0)
         }
     }
 
@@ -239,9 +237,12 @@ impl ply_rs::ply::PropertyAccess for PointCloudPoint {
         }
         
         match property.as_str() {
-            "x" => self.x = as_float(value),
-            "y" => self.y = as_float(value),
-            "z" => self.z = as_float(value),
+            "x" => self.position[0] = as_float(value),
+            "y" => self.position[1] = -as_float(value),
+            "z" => self.position[2] = as_float(value),
+            "scale_0" => self.scale[0] = -as_float(value),
+            "scale_1" => self.scale[1] = -as_float(value),
+            "scale_2" => self.scale[2] = -as_float(value),
             _ => {},
         }
     }

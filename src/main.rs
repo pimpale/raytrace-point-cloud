@@ -129,7 +129,7 @@ fn build_scene(
     // );
 
     // add teapot
-    let path = path::Path::new("./assets/teapot.ply");
+    let path = path::Path::new("./assets/point_cloud.ply");
     let parser = ply_rs::parser::Parser::<utils::PointCloudPoint>::new();
     let point_cloud = parser
         .read_ply(&mut std::fs::File::open(path).unwrap())

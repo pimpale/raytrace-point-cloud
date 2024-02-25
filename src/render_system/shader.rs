@@ -145,10 +145,12 @@ pub mod fs {
                 vec3 position;
                 float t;
                 bool miss;
+                uint instance_index;
+                uint primitive_index;
             };
 
             IntersectionInfo getIntersectionInfo(vec3 origin, vec3 direction) {
-                const float t_min = 0.01;
+                const float t_min = 0.05;
                 const float t_max = 1000.0;
                 rayQueryEXT ray_query;
                 rayQueryInitializeEXT(
@@ -247,7 +249,9 @@ pub mod fs {
                         ),
                         vec3(0.0),
                         0.0,
-                        true
+                        true,
+                        0,
+                        0
                     );
                 }
 
@@ -259,6 +263,9 @@ pub mod fs {
 
                 vec3 intersection_position = origin + direction * T;
 
+                uint instance_index = uint(packed_data[0][1]);
+                uint primitive_index = uint(packed_data[0][2]);
+
                 return IntersectionInfo(
                     IntersectionCoordinateSystem(
                         normal,
@@ -267,7 +274,9 @@ pub mod fs {
                     ),
                     intersection_position,
                     T,
-                    false
+                    false,
+                    instance_index,
+                    primitive_index
                 );
             }
 
@@ -302,7 +311,7 @@ pub mod fs {
 
                 vec3 reflectivity = vec3(0.5);
                 float alpha = 1.0;
-                vec3 emissivity = vec3(0.0);
+                vec3 emissivity = vec3(float(info.instance_index == 1));
                 float metallicity = 0.0;
 
                 // decide whether to do specular (0), transmissive (1), or lambertian (2) scattering
@@ -354,7 +363,7 @@ pub mod fs {
             }
 
             const uint SAMPLES_PER_PIXEL = 1;
-            const uint MAX_BOUNCES = 2;
+            const uint MAX_BOUNCES = 4;
 
             void main() {
                 // uint SAMPLES_PER_PIXEL = camera.samples;

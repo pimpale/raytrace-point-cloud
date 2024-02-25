@@ -89,8 +89,8 @@ fn build_scene(
         0,
         EntityCreationData {
             mesh: vec![AabbPositions {
-                min: [-0.5, -1., -2.],
-                max: [0.5, 1., 2.],
+                min: [-0.5, -0.5, -0.5],
+                max: [0.5, 0.5, 0.5],
             }],
             isometry: Isometry3::translation(0.0, 0.0, 0.0),
         },

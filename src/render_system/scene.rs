@@ -18,7 +18,7 @@ use vulkano::{
     buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer},
     command_buffer::{
         allocator::StandardCommandBufferAllocator, AutoCommandBufferBuilder, CommandBufferUsage,
-        PrimaryAutoCommandBuffer, PrimaryCommandBufferAbstract,
+        CopyBufferInfo, PrimaryAutoCommandBuffer, PrimaryCommandBufferAbstract,
     },
     device::Queue,
     memory::allocator::{AllocationCreateInfo, MemoryAllocator, MemoryTypeFilter},
@@ -106,8 +106,12 @@ where
             return;
         }
 
-        let (vertex_buffer, gsplat_buffer) =
-            blas_vertex_buffer(self.memory_allocator.clone(), object);
+        let (vertex_buffer, gsplat_buffer) = blas_vertex_buffer(
+            self.command_buffer_allocator.clone(),
+            self.transfer_queue.clone(),
+            self.memory_allocator.clone(),
+            object,
+        );
         let blas = create_bottom_level_acceleration_structure_aabb(
             &mut self.blas_command_buffer,
             self.memory_allocator.clone(),
@@ -274,16 +278,18 @@ where
 }
 
 fn blas_vertex_buffer(
+    command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
+    transfer_queue: Arc<Queue>,
     memory_allocator: Arc<dyn MemoryAllocator>,
     objects: &[(AabbPositions, GaussianSplat)],
 ) -> (Subbuffer<[AabbPositions]>, Subbuffer<[GaussianSplat]>) {
+    let n_vertexes = objects.len() as u64;
     let (vertexes, gsplats): (Vec<_>, Vec<_>) = objects.iter().cloned().unzip();
 
-    let vertex_buffer = Buffer::from_iter(
+    let vertex_buffer_tmp = Buffer::from_iter(
         memory_allocator.clone(),
         BufferCreateInfo {
-            usage: BufferUsage::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY
-                | BufferUsage::SHADER_DEVICE_ADDRESS,
+            usage: BufferUsage::TRANSFER_SRC,
             ..Default::default()
         },
         AllocationCreateInfo {
@@ -295,10 +301,10 @@ fn blas_vertex_buffer(
     )
     .unwrap();
 
-    let gsplat_buffer = Buffer::from_iter(
+    let gsplat_buffer_tmp = Buffer::from_iter(
         memory_allocator.clone(),
         BufferCreateInfo {
-            usage: BufferUsage::SHADER_DEVICE_ADDRESS,
+            usage: BufferUsage::TRANSFER_SRC,
             ..Default::default()
         },
         AllocationCreateInfo {
@@ -309,6 +315,65 @@ fn blas_vertex_buffer(
         gsplats,
     )
     .unwrap();
+
+    // command buffers
+    let mut transfer_command_buffer = AutoCommandBufferBuilder::primary(
+        command_buffer_allocator.as_ref(),
+        transfer_queue.queue_family_index(),
+        CommandBufferUsage::OneTimeSubmit,
+    )
+    .unwrap();
+
+    let vertex_buffer = Buffer::new_slice(
+        memory_allocator.clone(),
+        BufferCreateInfo {
+            usage: BufferUsage::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY
+                | BufferUsage::SHADER_DEVICE_ADDRESS
+                | BufferUsage::TRANSFER_DST,
+            ..Default::default()
+        },
+        AllocationCreateInfo {
+            memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
+            ..Default::default()
+        },
+        n_vertexes,
+    )
+    .unwrap();
+
+    let gsplat_buffer = Buffer::new_slice(
+        memory_allocator.clone(),
+        BufferCreateInfo {
+            usage: BufferUsage::SHADER_DEVICE_ADDRESS | BufferUsage::TRANSFER_DST,
+            ..Default::default()
+        },
+        AllocationCreateInfo {
+            memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
+            ..Default::default()
+        },
+        n_vertexes,
+    )
+    .unwrap();
+
+    transfer_command_buffer
+        .copy_buffer(CopyBufferInfo::buffers(
+            vertex_buffer_tmp.clone(),
+            vertex_buffer.clone(),
+        ))
+        .unwrap()
+        .copy_buffer(CopyBufferInfo::buffers(
+            gsplat_buffer_tmp.clone(),
+            gsplat_buffer.clone(),
+        ))
+        .unwrap();
+
+    transfer_command_buffer
+        .build()
+        .unwrap()
+        .execute(transfer_queue.clone())
+        .unwrap()
+        .then_signal_fence()
+        .wait(None)
+        .unwrap();
 
     (vertex_buffer, gsplat_buffer)
 }

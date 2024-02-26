@@ -1,4 +1,4 @@
-use nalgebra::{Point2, Point3, Vector2, Vector3};
+use nalgebra::{Point2, Point3, Quaternion, Vector2, Vector3};
 
 use crate::render_system::vertex::Vertex3D;
 
@@ -84,9 +84,9 @@ pub fn polyline(
 }
 
 pub fn cuboid(loc: Point3<f32>, dims: Vector3<f32>) -> Vec<Vertex3D> {
-    let fx = loc[0] - 0.5*dims[0];
-    let fy = loc[1] - 0.5*dims[1];
-    let fz = loc[2] - 0.5*dims[2];
+    let fx = loc[0] - 0.5 * dims[0];
+    let fy = loc[1] - 0.5 * dims[1];
+    let fz = loc[2] - 0.5 * dims[2];
 
     let v000 = [fx + 0.0, fy + 0.0, fz + 0.0];
     let v100 = [fx + dims[0], fy + 0.0, fz + 0.0];
@@ -199,7 +199,6 @@ pub fn get_aabb(obj: &[Vertex3D]) -> Vector3<f32> {
     max - min
 }
 
-
 pub fn get_normalized_mouse_coords(e: Point2<f32>, extent: [u32; 2]) -> Point2<f32> {
     let trackball_radius = extent[0].min(extent[1]) as f32;
     let center = Vector2::new(extent[0] as f32 / 2.0, extent[1] as f32 / 2.0);
@@ -215,35 +214,47 @@ pub fn screen_to_uv(e: Point2<f32>, extent: [u32; 2]) -> Point2<f32> {
 #[derive(Clone)]
 pub struct PointCloudPoint {
     pub position: Point3<f32>,
-    pub scale: Vector3<f32>
-} 
-
+    pub scale: Vector3<f32>,
+    pub rot: Quaternion<f32>,
+    pub color: [f32; 3],
+    pub opacity: f32,
+}
 
 impl ply_rs::ply::PropertyAccess for PointCloudPoint {
     fn new() -> Self {
         Self {
             position: Point3::new(0.0, 0.0, 0.0),
-            scale: Vector3::new(1.0, 1.0, 1.0)
+            scale: Vector3::new(1.0, 1.0, 1.0),
+            rot: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            color: [0.0, 0.0, 0.0],
+            opacity: 1.0,
         }
     }
 
     fn set_property(&mut self, property: String, value: ply_rs::ply::Property) {
-        
         fn as_float(property: ply_rs::ply::Property) -> f32 {
             match property {
                 ply_rs::ply::Property::Float(v) => v,
                 _ => panic!("expected float"),
             }
         }
-        
+
         match property.as_str() {
             "x" => self.position[0] = as_float(value),
             "y" => self.position[1] = -as_float(value),
             "z" => self.position[2] = as_float(value),
-            "scale_0" => self.scale[0] = -as_float(value),
-            "scale_1" => self.scale[1] = -as_float(value),
-            "scale_2" => self.scale[2] = -as_float(value),
-            _ => {},
+            "scale_0" => self.scale[0] = as_float(value).exp(),
+            "scale_1" => self.scale[1] = as_float(value).exp(),
+            "scale_2" => self.scale[2] = as_float(value).exp(),
+            "rot_0" => self.rot[0] = as_float(value),
+            "rot_1" => self.rot[1] = as_float(value),
+            "rot_2" => self.rot[2] = as_float(value),
+            "rot_3" => self.rot[3] = as_float(value),
+            "f_dc_0" => self.color[0] = as_float(value),
+            "f_dc_1" => self.color[1] = as_float(value),
+            "f_dc_2" => self.color[2] = as_float(value),
+            "opacity" => self.opacity = 1.0 / (1.0 + (-as_float(value)).exp()),
+            _ => {}
         }
     }
 }

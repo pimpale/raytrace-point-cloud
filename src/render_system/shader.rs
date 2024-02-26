@@ -38,9 +38,18 @@ pub mod fs {
                 vec3 max;
             };
 
+            layout(buffer_reference, buffer_reference_align=4, scalar) readonly buffer GaussianSplat {
+                vec4 rot;
+                vec3 scale;
+                vec3 color;
+                float opacity;
+            };
+
             struct InstanceData {
                 // points to the device address of the vertex data for this instance
                 uint64_t vertex_buffer_addr;
+                // points to the device address of the gaussian splat data for this instance
+                uint64_t gaussian_splat_buffer_addr;
                 // the transform of this instance
                 mat4x3 transform;
             };
@@ -143,13 +152,14 @@ pub mod fs {
             struct IntersectionInfo {
                 IntersectionCoordinateSystem hit_coords;
                 vec3 position;
-                float t;
+                float tmin;
                 bool miss;
                 uint instance_index;
                 uint primitive_index;
             };
 
-            IntersectionInfo getIntersectionInfo(vec3 origin, vec3 direction) {
+            IntersectionInfo getIntersectionInfo(vec3 origin, vec3 direction, uint ignore_instance, uint ignore_primitive) {
+                uvec2 ignore_id = uvec2(ignore_instance, ignore_primitive);
                 const float t_min = 0.05;
                 const float t_max = 1000.0;
                 rayQueryEXT ray_query;
@@ -192,9 +202,9 @@ pub mod fs {
                         // get the primitive index and instance index
                         uint candidate_prim_index = rayQueryGetIntersectionPrimitiveIndexEXT(ray_query, false);
                         uint candidate_instance_index = rayQueryGetIntersectionInstanceIdEXT(ray_query, false);
+                        uvec2 candidate_id = uvec2(candidate_instance_index, candidate_prim_index);
         
-                        InstanceData candidate_id = instance_data[candidate_instance_index];
-                        Vertex candidate_v = Vertex(candidate_id.vertex_buffer_addr)[candidate_prim_index];
+                        Vertex candidate_v = Vertex(instance_data[candidate_instance_index].vertex_buffer_addr)[candidate_prim_index];
 
                         vec3 inverse_dir = 1.0 / candidate_object_space_direction;
                         vec3 tbot = inverse_dir * (candidate_v.min - candidate_object_space_origin);
@@ -206,7 +216,7 @@ pub mod fs {
                         traverse = min(tmax.xx, tmax.yz);
                         float traversehi = min(traverse.x, traverse.y);
 
-                        if(traversehi > max(traverselow, 0.0)) {
+                        if(traversehi > max(traverselow, 0.0) && candidate_id != ignore_id) {
                             rayQueryGenerateIntersectionEXT(ray_query, traverselow);
                             if(traverselow < packed_data[0][0]) {
 
@@ -304,34 +314,22 @@ pub mod fs {
                     );
                 }
 
+                InstanceData instance = instance_data[info.instance_index];
+                GaussianSplat gsplat = GaussianSplat(instance.gaussian_splat_buffer_addr)[info.primitive_index];
+
                 vec3 new_origin = info.position;
                 vec3 new_direction;
 
                 float scatter_pdf_over_ray_pdf;
 
-                vec3 reflectivity = vec3(0.5);
-                float alpha = 1.0;
-                vec3 emissivity = vec3(5*float(info.instance_index == 0));
-                float metallicity = 0.0;
+                vec3 reflectivity = gsplat.color;
+                float opacity = gsplat.opacity;
+                vec3 emissivity = gsplat.color;//vec3(10*float(info.instance_index == 0));
 
                 // decide whether to do specular (0), transmissive (1), or lambertian (2) scattering
                 float scatter_kind_rand = murmur3_finalizef(murmur3_combine(seed, 0));
 
-                if(scatter_kind_rand < metallicity) {
-                    // mirror scattering
-                    scatter_pdf_over_ray_pdf = 1.0;
-
-                    new_direction = reflect(
-                        direction,
-                        info.hit_coords.normal
-                    );
-                } else if (scatter_kind_rand < metallicity + (1.0-alpha)) {
-                    // transmissive scattering
-                    scatter_pdf_over_ray_pdf = 1.0;
-
-                    new_direction = direction;
-                    reflectivity = vec3(1.0);
-                } else {
+                if (scatter_kind_rand < opacity) {
                     // lambertian scattering
                     reflectivity = reflectivity / M_PI;
 
@@ -349,6 +347,13 @@ pub mod fs {
                     // for lambertian surfaces, the scatter pdf and the ray sampling pdf are the same
                     // see here: https://raytracing.github.io/books/RayTracingTheRestOfYourLife.html#lightscattering/thescatteringpdf
                     scatter_pdf_over_ray_pdf = 1.0;
+                } else {
+                    // transmissive scattering
+                    scatter_pdf_over_ray_pdf = 1.0;
+
+                    new_direction = direction;
+                    reflectivity = vec3(1.0);
+                    emissivity = vec3(0.0);
                 }
 
                 // compute data for this bounce
@@ -362,7 +367,7 @@ pub mod fs {
                 );
             }
 
-            const uint SAMPLES_PER_PIXEL = 1;
+            const uint SAMPLES_PER_PIXEL = 4;
             const uint MAX_BOUNCES = 4;
 
             void main() {
@@ -381,7 +386,7 @@ pub mod fs {
                 vec3 first_direction = normalize(in_uv.x * camera.right * camera.aspect + in_uv.y * camera.up + camera.front);
                 
                 // do the first cast, which is deterministic
-                IntersectionInfo first_intersection_info = getIntersectionInfo(first_origin, first_direction);
+                IntersectionInfo first_intersection_info = getIntersectionInfo(first_origin, first_direction, 0xFFFFFFFF, 0xFFFFFFFF);
 
                 vec3 color = vec3(0.0);
                 for (uint sample_id = 0; sample_id < SAMPLES_PER_PIXEL; sample_id++) {
@@ -394,10 +399,12 @@ pub mod fs {
 
                     vec3 origin = bounce_info.new_origin;
                     vec3 direction = bounce_info.new_direction;
+                    uint prev_instance_index = first_intersection_info.instance_index;
+                    uint prev_primitive_index = first_intersection_info.primitive_index;
 
                     uint current_bounce;
                     for (current_bounce = 1; current_bounce < MAX_BOUNCES; current_bounce++) {
-                        IntersectionInfo intersection_info = getIntersectionInfo(origin, direction);
+                        IntersectionInfo intersection_info = getIntersectionInfo(origin, direction, prev_instance_index, prev_primitive_index);
                         bounce_info = doBounce(origin, direction, intersection_info, murmur3_combine(sample_seed, current_bounce));
                         bounce_emissivity[current_bounce] = bounce_info.emissivity;
                         bounce_reflectivity[current_bounce] = bounce_info.reflectivity;
@@ -410,6 +417,8 @@ pub mod fs {
 
                         origin = bounce_info.new_origin;
                         direction = bounce_info.new_direction;
+                        prev_instance_index = intersection_info.instance_index;
+                        prev_primitive_index = intersection_info.primitive_index;
                     }
                     
                     // compute the color for this sample

@@ -12,9 +12,8 @@ use vulkano::{
         AccelerationStructureBuildType, AccelerationStructureCreateInfo,
         AccelerationStructureGeometries, AccelerationStructureGeometryAabbsData,
         AccelerationStructureGeometryInstancesData, AccelerationStructureGeometryInstancesDataType,
-        AccelerationStructureGeometryTrianglesData, AccelerationStructureInstance,
-        AccelerationStructureType, BuildAccelerationStructureFlags, BuildAccelerationStructureMode,
-        GeometryFlags,
+        AccelerationStructureInstance, AccelerationStructureType, BuildAccelerationStructureFlags,
+        BuildAccelerationStructureMode, GeometryFlags,
     },
     buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer},
     command_buffer::{
@@ -23,15 +22,15 @@ use vulkano::{
     },
     device::Queue,
     memory::allocator::{AllocationCreateInfo, MemoryAllocator, MemoryTypeFilter},
-    pipeline::graphics::vertex_input,
     sync::GpuFuture,
     DeviceSize, Packed24_8,
 };
 
-use super::vertex::InstanceData;
+use super::vertex::{GaussianSplat, InstanceData};
 
 pub struct Object {
     isometry: Isometry3<f32>,
+    gsplat_buffer: Subbuffer<[GaussianSplat]>,
     vertex_buffer: Subbuffer<[AabbPositions]>,
     blas: Arc<AccelerationStructure>,
 }
@@ -96,13 +95,19 @@ where
     }
 
     // adds a new object to the scene with the given isometry
-    pub fn add_object(&mut self, key: K, object: &Vec<AabbPositions>, isometry: Isometry3<f32>) {
+    pub fn add_object(
+        &mut self,
+        key: K,
+        object: &Vec<(AabbPositions, GaussianSplat)>,
+        isometry: Isometry3<f32>,
+    ) {
         if object.len() == 0 {
             self.objects.insert(key, None);
             return;
         }
 
-        let vertex_buffer = blas_vertex_buffer(self.memory_allocator.clone(), [object]);
+        let (vertex_buffer, gsplat_buffer) =
+            blas_vertex_buffer(self.memory_allocator.clone(), object);
         let blas = create_bottom_level_acceleration_structure_aabb(
             &mut self.blas_command_buffer,
             self.memory_allocator.clone(),
@@ -113,6 +118,7 @@ where
             key,
             Some(Object {
                 isometry,
+                gsplat_buffer,
                 vertex_buffer,
                 blas,
             }),
@@ -178,6 +184,7 @@ where
                         |Object {
                              isometry,
                              vertex_buffer,
+                             gsplat_buffer,
                              ..
                          }| InstanceData {
                             transform: {
@@ -186,6 +193,7 @@ where
                                 mat3x4.into()
                             },
                             vertex_buffer_addr: vertex_buffer.device_address().unwrap().get(),
+                            gsplat_buffer_addr: gsplat_buffer.device_address().unwrap().get(),
                         },
                     )
                     .collect::<Vec<_>>(),
@@ -265,22 +273,14 @@ where
     }
 }
 
-fn blas_vertex_buffer<'a, Vertex, Container>(
+fn blas_vertex_buffer(
     memory_allocator: Arc<dyn MemoryAllocator>,
-    objects: Container,
-) -> Subbuffer<[Vertex]>
-where
-    Container: IntoIterator<Item = &'a Vec<Vertex>>,
-    Vertex: Default + Clone + BufferContents,
-{
-    let vertexes = objects
-        .into_iter()
-        .flatten()
-        .cloned()
-        .collect::<Vec<Vertex>>();
+    objects: &[(AabbPositions, GaussianSplat)],
+) -> (Subbuffer<[AabbPositions]>, Subbuffer<[GaussianSplat]>) {
+    let (vertexes, gsplats): (Vec<_>, Vec<_>) = objects.iter().cloned().unzip();
 
-    Buffer::from_iter(
-        memory_allocator,
+    let vertex_buffer = Buffer::from_iter(
+        memory_allocator.clone(),
         BufferCreateInfo {
             usage: BufferUsage::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY
                 | BufferUsage::SHADER_DEVICE_ADDRESS,
@@ -293,7 +293,24 @@ where
         },
         vertexes,
     )
-    .unwrap()
+    .unwrap();
+
+    let gsplat_buffer = Buffer::from_iter(
+        memory_allocator.clone(),
+        BufferCreateInfo {
+            usage: BufferUsage::SHADER_DEVICE_ADDRESS,
+            ..Default::default()
+        },
+        AllocationCreateInfo {
+            memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
+                | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+            ..Default::default()
+        },
+        gsplats,
+    )
+    .unwrap();
+
+    (vertex_buffer, gsplat_buffer)
 }
 
 fn create_top_level_acceleration_structure(

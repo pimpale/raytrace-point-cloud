@@ -1,4 +1,7 @@
-use vulkano::{acceleration_structure::AabbPositions, buffer::BufferContents, pipeline::graphics::vertex_input::Vertex};
+use vulkano::{
+    acceleration_structure::AabbPositions, buffer::BufferContents,
+    pipeline::graphics::vertex_input::Vertex,
+};
 
 #[derive(Clone, Copy, Debug, BufferContents, Vertex, Default)]
 #[repr(C)]
@@ -26,17 +29,26 @@ impl Vertex3D {
 #[repr(C)]
 pub struct InstanceData {
     pub vertex_buffer_addr: u64,
+    pub gsplat_buffer_addr: u64,
     pub transform: [[f32; 3]; 4],
 }
 
 #[derive(Clone, Copy, Debug, BufferContents, Default)]
 #[repr(C)]
 pub struct GaussianSplat {
-    pub aabb: AabbPositions,
+    pub rot: [f32; 4],
+    pub scale: [f32; 3],
+    pub color: [f32; 3],
+    pub opacity: f32,
 }
 
 impl GaussianSplat {
-    pub fn new(min: [f32; 3], max: [f32; 3]) -> Self {
-        Self { aabb: AabbPositions { min, max } }
+    pub fn new(rot: [f32; 4], scale: [f32; 3], color: [f32; 3], opacity: f32) -> Self {
+        Self {
+            rot,
+            scale,
+            color,
+            opacity,
+        }
     }
 }

@@ -23,11 +23,11 @@ use crate::game_system::manager::UpdateData;
 use crate::game_system::scene_manager::SceneManager;
 use crate::render_system::interactive_rendering;
 use crate::render_system::scene::Scene;
-use crate::render_system::vertex::Vertex3D;
+use crate::render_system::vertex::GaussianSplat;
 
 pub struct EntityCreationData {
     // mesh (untransformed)
-    pub mesh: Vec<AabbPositions>,
+    pub mesh: Vec<(AabbPositions, GaussianSplat)>,
     // initial transformation
     // position and rotation in space
     pub isometry: Isometry3<f32>,
@@ -35,7 +35,7 @@ pub struct EntityCreationData {
 
 pub struct Entity {
     // mesh (untransformed)
-    pub mesh: Vec<AabbPositions>,
+    pub mesh: Vec<(AabbPositions, GaussianSplat)>,
     // transformation from origin
     pub isometry: Isometry3<f32>,
 }

@@ -2,9 +2,9 @@ use std::path;
 use std::sync::Arc;
 
 use game_system::game_world::{EntityCreationData, GameWorld};
-use nalgebra::{Isometry3, Point3, Vector3};
+use nalgebra::{Isometry3, Matrix3, Point3, UnitQuaternion, Vector3};
 
-use render_system::vertex::Vertex3D;
+use statrs::distribution::{ContinuousCDF, Normal};
 use utils::PointCloudPoint;
 use vulkano::acceleration_structure::AabbPositions;
 use vulkano::command_buffer::allocator::StandardCommandBufferAllocator;
@@ -21,6 +21,9 @@ use winit::event::{Event, WindowEvent};
 use winit::window::WindowBuilder;
 
 use ply_rs;
+use rayon::prelude::*;
+
+use crate::render_system::vertex::GaussianSplat;
 
 mod camera;
 mod game_system;
@@ -88,10 +91,18 @@ fn build_scene(
     world.add_entity(
         0,
         EntityCreationData {
-            mesh: vec![AabbPositions {
-                min: [-0.5, -0.5, -0.5],
-                max: [0.5, 0.5, 0.5],
-            }],
+            mesh: vec![(
+                AabbPositions {
+                    min: [-0.5, -0.5, -0.5],
+                    max: [0.5, 0.5, 0.5],
+                },
+                GaussianSplat::new(
+                    UnitQuaternion::identity().coords.into(),
+                    [1.0, 1.0, 1.0],
+                    [0.5, 0.5, 0.5],
+                    1.0,
+                ),
+            )],
             isometry: Isometry3::translation(0.0, 0.0, 0.0),
         },
     );
@@ -135,13 +146,43 @@ fn build_scene(
         .read_ply(&mut std::fs::File::open(path).unwrap())
         .unwrap();
 
-    let mut vertexes = vec![];
-    for PointCloudPoint { scale, position } in point_cloud.payload["vertex"].iter() {
-        vertexes.push(AabbPositions {
-            min: (position.coords - 0.01*scale).into(),
-            max: (position.coords + 0.01*scale).into(),
-        });
-    }
+    let vertexes = point_cloud.payload["vertex"]
+        .par_iter()
+        .cloned()
+        .map(
+            |PointCloudPoint {
+                 scale,
+                 position,
+                 rot,
+                 color,
+                 opacity,
+             }| {
+                let r: Matrix3<f32> = UnitQuaternion::new_normalize(rot).into();
+                let s = Matrix3::from_diagonal(&scale);
+
+                let sigma = r * s * s.transpose() * r.transpose();
+
+                let threshold = 0.1;
+
+                let mut min = [0.0, 0.0, 0.0];
+                let mut max = [1.0, 1.0, 1.0];
+                for dim in 0..3 {
+                    min[dim] = Normal::new(position[dim] as f64, sigma[(dim, dim)].sqrt() as f64)
+                        .unwrap()
+                        .inverse_cdf(threshold) as f32;
+                    max[dim] = Normal::new(position[dim] as f64, sigma[(dim, dim)].sqrt() as f64)
+                        .unwrap()
+                        .inverse_cdf(1.0 - threshold) as f32;
+                }
+
+                (
+                    AabbPositions { min, max },
+                    GaussianSplat::new(rot.coords.into(), scale.into(), color, opacity),
+                )
+            },
+        )
+        .collect::<Vec<_>>();
+
     dbg!(vertexes.len());
 
     world.add_entity(

@@ -90,20 +90,20 @@ fn build_scene(
     world.add_entity(
         0,
         EntityCreationData {
-            mesh: vec![(
-                utils::xy_quad(
-                    Point3::default(),
-                    Vector3::new(1.0, 0.0, 0.0),
-                    Vector3::new(0.0, 0.0, 1.0),
-                    0xFFFFFF,
-                ),
-                GaussianSplat::new(
-                    UnitQuaternion::identity().coords.into(),
-                    [1.0, 1.0],
-                    [0.5, 0.5, 0.5],
-                    1.0,
-                ),
-            )],
+            mesh: vec![{
+                let p = Point3::new(0.0, 0.0, 0.0);
+                let r = UnitQuaternion::identity();
+                let s = [0.01, 0.01];
+                let color = [0.5, 0.5, 0.5];
+
+                let t_u = r * Vector3::new(s[0], 0.0, 0.0);
+                let t_v = r * Vector3::new(0.0, s[1], 0.0);
+
+                let vertexes = utils::xy_quad(p, t_u, t_v, 0xFFFFFF);
+                
+                // return pair of mesh and GaussianSplat
+                (vertexes, GaussianSplat::new(p.into(), r.coords.into(), s, color, 1.0))
+            }],
             isometry: Isometry3::translation(0.0, 0.0, 0.0),
         },
     );
@@ -141,7 +141,7 @@ fn build_scene(
     // );
 
     // add teapot
-    let path = path::Path::new("./assets/point_cloud.ply");
+    let path = path::Path::new("./data/dtu_scan105_2d.ply");
     let parser = ply_rs::parser::Parser::<utils::PointCloudPoint>::new();
     let point_cloud = parser
         .read_ply(&mut std::fs::File::open(path).unwrap())
@@ -159,7 +159,7 @@ fn build_scene(
                  opacity,
              }| {
                 let r: Matrix3<f32> = UnitQuaternion::new_normalize(rot).into();
-                let scale = Vector2::new(scale[0], scale[1]);
+                let scale = 2.0*Vector2::new(scale[0], scale[1]);
                 (
                     utils::xy_quad(
                         position,
@@ -167,7 +167,7 @@ fn build_scene(
                         r * Vector3::new(0.0, scale[1], 0.0),
                         0xFFFFFF,
                     ),
-                    GaussianSplat::new(rot.coords.into(), scale.into(), color, opacity),
+                    GaussianSplat::new(position.into(), rot.coords.into(), scale.into(), color, opacity),
                 )
             },
         )

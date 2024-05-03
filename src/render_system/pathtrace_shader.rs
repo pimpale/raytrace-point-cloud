@@ -23,10 +23,8 @@ vulkano_shaders::shader! {
         };    
 
         layout(buffer_reference, buffer_reference_align=4, scalar) readonly buffer GaussianSplat {
-            vec4 rot;
             vec3 color;
             float opacity;
-            vec2 scale;
         };
 
         struct InstanceData {
@@ -145,7 +143,7 @@ vulkano_shaders::shader! {
                 transform * vec4(tri[1], 1.0),
                 transform * vec4(tri[2], 1.0)
             );
-        }
+        }    
 
         struct IntersectionCoordinateSystem {
             vec3 normal;
@@ -259,41 +257,49 @@ vulkano_shaders::shader! {
     
             // get the instance data for this instance
             InstanceData id = instance_data[info.instance_index];
-    
-            Vertex v0 = Vertex(id.vertex_buffer_addr)[info.prim_index*3 + 0];
-            Vertex v1 = Vertex(id.vertex_buffer_addr)[info.prim_index*3 + 1];
-            Vertex v2 = Vertex(id.vertex_buffer_addr)[info.prim_index*3 + 2];
-        
-            // triangle untransformed
-            vec3[3] tri_r = vec3[3](
-                v0.position,
-                v1.position,
-                v2.position
-            );
-        
 
-            // transform triangle
-            vec3[3] tri = triangleTransform(id.transform, tri_r);
+            Vertex t0 = Vertex(id.vertex_buffer_addr)[info.prim_index*3 + 0];
+            Vertex t1 = Vertex(id.vertex_buffer_addr)[info.prim_index*3 + 1];
+            Vertex t2 = Vertex(id.vertex_buffer_addr)[info.prim_index*3 + 2];
+
+            vec3 tri_r[3] = {t0.position, t1.position, t2.position};
+            vec3 tri[3] = triangleTransform(id.transform, tri_r);        
     
+            vec3 intersection_point = tri[0] * bary3.x + tri[1] * bary3.y + tri[2] * bary3.z;
             IntersectionCoordinateSystem ics = localCoordinateSystem(tri);
-    
+
+            vec3 gsplat_position;
+            vec3 t_u;
+            vec3 t_v;
+            if (info.prim_index % 2 == 0) {
+                gsplat_position = 0.5 * tri[0] + 0.5 * tri[1];
+                t_u = tri[1]-tri[2];
+                t_v = tri[0]-tri[2];
+            } else {
+                gsplat_position = 0.5 * tri[0] + 0.5 * tri[2];
+                t_u = tri[1]-tri[0];
+                t_v = tri[1]-tri[2];
+            }
 
             GaussianSplat gsplat = GaussianSplat(id.gaussian_splat_buffer_addr)[info.prim_index/6];
 
-            mat3 R = quat_to_mat3(gsplat.rot);
-            mat3 S = mat3(
-                vec3(gsplat.scale.x, 0.0, 0.0),
-                vec3(0.0, gsplat.scale.y, 0.0),
-                vec3(0.0, 0.0, 0.0)
-            );
+            // vector from gaussian center to the hit point
+            vec3 hit_delta = intersection_point - gsplat_position;
 
-            vec3 new_origin = origin;
+            // project the hit delta onto t_u and t_v
+            float hit_delta_proj_u = 4*dot(hit_delta, t_u) / dot(t_u, t_u);
+            float hit_delta_proj_v = 4*dot(hit_delta, t_v) / dot(t_v, t_v);
+
+            // get the gaussian value at the point
+            float gaussian_value = exp(-.5 * (hit_delta_proj_u*hit_delta_proj_u + hit_delta_proj_v*hit_delta_proj_v));
+
+            vec3 new_origin = intersection_point;
             vec3 new_direction;
 
             float scatter_pdf_over_ray_pdf;
 
             vec3 reflectivity = gsplat.color;
-            float opacity = 0.1;
+            float opacity =  float(gaussian_value > 0.1);
             vec3 emissivity = vec3(100*float(info.instance_index == 0));
 
             // decide whether to do specular (0), transmissive (1), or lambertian (2) scattering
@@ -341,7 +347,7 @@ vulkano_shaders::shader! {
             return 2*vec2(screen)/vec2(screen_size) - 1.0;
         }    
 
-        const uint SAMPLES_PER_PIXEL = 8;
+        const uint SAMPLES_PER_PIXEL = 1;
         const uint MAX_BOUNCES = 8;
 
         void main() {

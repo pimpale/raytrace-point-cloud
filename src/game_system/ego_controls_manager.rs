@@ -62,9 +62,9 @@ impl Manager for EgoControlsManager {
 
         let mut changes = vec![];
 
-        let move_magnitude: f32 = 0.1;
+        let move_magnitude: f32 = 0.01;
         let rotate_magnitude: f32 = 0.03;
-        let jump_magnitude: f32 = 0.1;
+        let jump_magnitude: f32 = 0.01;
 
         let mut target_linvel = Vector3::zeros();
         let mut target_angvel = Vector3::zeros();

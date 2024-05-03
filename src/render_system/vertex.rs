@@ -43,17 +43,13 @@ pub struct InstanceData {
 #[derive(Clone, Copy, Debug, BufferContents, Default)]
 #[repr(C)]
 pub struct GaussianSplat {
-    pub rot: [f32; 4],
     pub color: [f32; 3],
     pub opacity: f32,
-    pub scale: [f32; 2],
 }
 
 impl GaussianSplat {
-    pub fn new(rot: [f32; 4], scale: [f32; 2], color: [f32; 3], opacity: f32) -> Self {
+    pub fn new(position: [f32; 3], rot: [f32; 4], scale: [f32; 2], color: [f32; 3], opacity: f32) -> Self {
         Self {
-            rot,
-            scale,
             color,
             opacity,
         }

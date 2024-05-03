@@ -271,10 +271,11 @@ fn blas_vertex_buffer(
     memory_allocator: Arc<dyn MemoryAllocator>,
     objects: &[([Vertex3D; 6], GaussianSplat)],
 ) -> (Subbuffer<[Vertex3D]>, Subbuffer<[GaussianSplat]>) {
-    let n_vertexes = objects.len() as u64;
     let (vertex_arrs, gsplats): (Vec<_>, Vec<_>) = objects.iter().cloned().unzip();
 
     let vertexes: Vec<_> = vertex_arrs.into_iter().flatten().collect();
+    let n_vertexes = vertexes.len() as u64;
+    let n_gaussian_splats = gsplats.len() as u64;
 
     let vertex_buffer_tmp = Buffer::from_iter(
         memory_allocator.clone(),
@@ -340,7 +341,7 @@ fn blas_vertex_buffer(
             memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
             ..Default::default()
         },
-        n_vertexes,
+        n_gaussian_splats,
     )
     .unwrap();
 

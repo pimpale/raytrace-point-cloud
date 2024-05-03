@@ -17,15 +17,16 @@ vulkano_shaders::shader! {
         layout(set = 0, binding = 0) uniform accelerationStructureEXT top_level_acceleration_structure;
         
         layout(buffer_reference, buffer_reference_align=4, scalar) readonly buffer Vertex {
-            vec3 min;
-            vec3 max;
-        };
+            vec3 position;
+            uint t;
+            vec2 uv;
+        };    
 
         layout(buffer_reference, buffer_reference_align=4, scalar) readonly buffer GaussianSplat {
             vec4 rot;
-            vec3 scale;
             vec3 color;
             float opacity;
+            vec2 scale;
         };
 
         struct InstanceData {
@@ -138,15 +139,35 @@ vulkano_shaders::shader! {
                 1.0 - xx - yy);
         }
 
-        // inverse of the cumulative distribution function of the normal distribution
-        float invcdf(float p) {
-            if(p > 0.5) {
-                return 5.55556 * (1 - pow((1-p)/p, 0.1186));
-            } else {
-                return -5.55556 * (1 - pow(p/(1-p), 0.1186));
-            }
+        vec3[3] triangleTransform(mat4x3 transform, vec3[3] tri) {
+            return vec3[3](
+                transform * vec4(tri[0], 1.0),
+                transform * vec4(tri[1], 1.0),
+                transform * vec4(tri[2], 1.0)
+            );
         }
 
+        struct IntersectionCoordinateSystem {
+            vec3 normal;
+            vec3 tangent;
+            vec3 bitangent;
+        };
+
+            
+        IntersectionCoordinateSystem localCoordinateSystem(vec3[3] tri) {
+            vec3 v0_1 = tri[1] - tri[0];
+            vec3 v0_2 = tri[2] - tri[0];
+            vec3 normal = cross(v0_1, v0_2);
+            vec3 tangent = v0_1;
+            vec3 bitangent = cross(normal, tangent);
+            
+            return IntersectionCoordinateSystem(
+                normalize(normal),
+                normalize(tangent),
+                normalize(bitangent)
+            );
+        }
+        
         // returns a vector sampled from the hemisphere with positive y
         // sample is weighted by cosine of angle between sample and y axis
         // https://cseweb.ucsd.edu/classes/sp17/cse168-a/CSE168_08_PathTracing.pdf
@@ -158,13 +179,6 @@ vulkano_shaders::shader! {
             return vec3(r * cos(phi), sqrt(z), r * sin(phi));
         }
 
-        struct IntersectionCoordinateSystem {
-            vec3 normal;
-            vec3 tangent;
-            vec3 bitangent;
-        };
-
-
         // returns a vector sampled from the hemisphere defined around the coordinate system defined by normal, tangent, and bitangent
         // normal, tangent and bitangent form a right handed coordinate system 
         vec3 alignedCosineWeightedSampleHemisphere(vec2 uv, IntersectionCoordinateSystem ics) {
@@ -174,151 +188,45 @@ vulkano_shaders::shader! {
 
         struct IntersectionInfo {
             bool miss;
-            IntersectionCoordinateSystem hit_coords;
-            float tmin;
-            float tmax;
             uint instance_index;
-            uint primitive_index;
+            uint prim_index;
+            vec2 bary;
         };
-
-        IntersectionInfo getIntersectionInfo(vec3 origin, vec3 direction, uint ignore_instance, uint ignore_primitive) {
-            uvec2 ignore_id = uvec2(ignore_instance, ignore_primitive);
-            const float t_min = 0.05;
+    
+        IntersectionInfo getIntersectionInfo(vec3 origin, vec3 direction) {
+            const float t_min = 0.001;
             const float t_max = 1000.0;
             rayQueryEXT ray_query;
             rayQueryInitializeEXT(
                 ray_query,
                 top_level_acceleration_structure,
-                gl_RayFlagsNoneEXT,
+                gl_RayFlagsNoneEXT,//gl_RayFlagsCullBackFacingTrianglesEXT,
                 0xFF,
                 origin,
                 t_min,
                 direction,
                 t_max
             );
-
-            // we have to pack all of our data to work around a bizzare bug in Nvidia's ray tracing implementation
-            // basically, we suffer from a  CTX SWITCH TIMEOUT if we assign more than one variable in the while loop
-            // also, the ray query does not pick the closest intersection, so we have to do that manually
-            mat4x3 packed_data = mat4x3(
-                vec3(
-                    // minimum t
-                    t_max,
-                    // maximum t
-                    t_max,
-                    // dummy
-                    0.0
-                ),
-                vec3(
-                    // instance index
-                    0.0,
-                    // primitive index
-                    0.0,
-                    // dummy
-                    0.0
-                ),
-                // normal
-                vec3(0.0),
-                // tangent
-                vec3(0.0)
-            );
-
-            // trace ray
-            while (rayQueryProceedEXT(ray_query)) {
-                // commit if intersection with aabb
-                if(rayQueryGetIntersectionCandidateAABBOpaqueEXT(ray_query)) {
-                    vec3 candidate_object_space_origin = rayQueryGetIntersectionObjectRayOriginEXT(ray_query, false);
-                    vec3 candidate_object_space_direction = rayQueryGetIntersectionObjectRayDirectionEXT(ray_query, false);
-
-                    // get the primitive index and instance index
-                    uint candidate_prim_index = rayQueryGetIntersectionPrimitiveIndexEXT(ray_query, false);
-                    uint candidate_instance_index = rayQueryGetIntersectionInstanceIdEXT(ray_query, false);
-                    uvec2 candidate_id = uvec2(candidate_instance_index, candidate_prim_index);
     
-                    Vertex candidate_v = Vertex(instance_data[candidate_instance_index].vertex_buffer_addr)[candidate_prim_index];
-
-                    vec3 inverse_dir = 1.0 / candidate_object_space_direction;
-                    vec3 tbot = inverse_dir * (candidate_v.min - candidate_object_space_origin);
-                    vec3 ttop = inverse_dir * (candidate_v.max - candidate_object_space_origin);
-                    vec3 tmin = min(ttop, tbot);
-                    vec3 tmax = max(ttop, tbot);
-                    vec2 traverse = max(tmin.xx, tmin.yz);
-                    float traverselow = max(traverse.x, traverse.y);
-                    traverse = min(tmax.xx, tmax.yz);
-                    float traversehi = min(traverse.x, traverse.y);
-
-                    if(traversehi > max(traverselow, 0.0) && candidate_id != ignore_id) {
-                        rayQueryGenerateIntersectionEXT(ray_query, traverselow);
-                        if(traverselow < packed_data[0][0]) {
-
-                            vec3 boxctr = (candidate_v.min + candidate_v.max) / 2.0;
-
-                            vec3 box_hit = boxctr - (candidate_object_space_origin + (traverselow * candidate_object_space_direction));
-                            box_hit /= (candidate_v.max - candidate_v.min);
-                            vec3 box_intersect_normal = -box_hit / max(max(abs(box_hit.x), abs(box_hit.y)), abs(box_hit.z));
-                            box_intersect_normal = clamp(box_intersect_normal, vec3(-1.0), vec3(1.0));
-                            box_intersect_normal = normalize(trunc(box_intersect_normal * 1.00001f));
-
-                            // recall that the normal transformation matrix is the transpose of the inverse of the object to world matrix
-                            mat4x3 objectToWorldInverse = rayQueryGetIntersectionWorldToObjectEXT(ray_query, false);
-                            
-                            vec3 normal = normalize((box_intersect_normal * objectToWorldInverse).xyz);
-
-                            vec3 tangent;
-                            if(cross(normal, vec3(0.0, 1.0, 0.0)) == vec3(0.0)) {
-                                tangent = vec3(1.0, 0.0, 0.0);
-                            } else {
-                                tangent = normalize(cross(normal, vec3(0.0, 1.0, 0.0)));
-                            }
-
-                            packed_data = mat4x3(
-                                vec3(traverselow, traversehi, 0.0),
-                                vec3(uintBitsToFloat(candidate_instance_index), uintBitsToFloat(candidate_prim_index), 0.0),
-                                normal,
-                                tangent
-                            );
-                        }
-                    }
-                }
-            }
-
+            // trace ray
+            while (rayQueryProceedEXT(ray_query));
+            
             // if miss return miss
-            if(rayQueryGetIntersectionTypeEXT(ray_query, true) != gl_RayQueryCommittedIntersectionGeneratedEXT) {
+            if(rayQueryGetIntersectionTypeEXT(ray_query, true) == gl_RayQueryCommittedIntersectionNoneEXT) {
                 return IntersectionInfo(
                     true,
-                    IntersectionCoordinateSystem(
-                        vec3(0.0),
-                        vec3(0.0),
-                        vec3(0.0)
-                    ),
-                    0.0,
-                    0.0,
                     0,
-                    0
+                    0,
+                    vec2(0.0)
+                );
+            } else {
+                return IntersectionInfo(
+                    false,
+                    rayQueryGetIntersectionInstanceIdEXT(ray_query, true),
+                    rayQueryGetIntersectionPrimitiveIndexEXT(ray_query, true),
+                    rayQueryGetIntersectionBarycentricsEXT(ray_query, true)
                 );
             }
-
-            float tmin = packed_data[0][0];
-            float tmax = packed_data[0][1];
-            uint instance_index = floatBitsToUint(packed_data[1][0]);
-            uint primitive_index = floatBitsToUint(packed_data[1][1]);
-
-            vec3 normal = packed_data[2];
-            vec3 tangent = packed_data[3];
-            vec3 bitangent = cross(normal, tangent);
-
-            return IntersectionInfo(
-                false,
-                IntersectionCoordinateSystem(
-                    normal,
-                    tangent,
-                    bitangent
-                ),
-                tmin,
-                tmax,
-                instance_index,
-                primitive_index
-            );
         }
 
         struct BounceInfo {
@@ -345,17 +253,41 @@ vulkano_shaders::shader! {
                 );
             }
 
-            InstanceData instance = instance_data[info.instance_index];
-            GaussianSplat gsplat = GaussianSplat(instance.gaussian_splat_buffer_addr)[info.primitive_index];
+
+            // get barycentric coordinates
+            vec3 bary3 = vec3(1.0 - info.bary.x - info.bary.y,  info.bary.x, info.bary.y);
+    
+            // get the instance data for this instance
+            InstanceData id = instance_data[info.instance_index];
+    
+            Vertex v0 = Vertex(id.vertex_buffer_addr)[info.prim_index*3 + 0];
+            Vertex v1 = Vertex(id.vertex_buffer_addr)[info.prim_index*3 + 1];
+            Vertex v2 = Vertex(id.vertex_buffer_addr)[info.prim_index*3 + 2];
+        
+            // triangle untransformed
+            vec3[3] tri_r = vec3[3](
+                v0.position,
+                v1.position,
+                v2.position
+            );
+        
+
+            // transform triangle
+            vec3[3] tri = triangleTransform(id.transform, tri_r);
+    
+            IntersectionCoordinateSystem ics = localCoordinateSystem(tri);
+    
+
+            GaussianSplat gsplat = GaussianSplat(id.gaussian_splat_buffer_addr)[info.prim_index/6];
 
             mat3 R = quat_to_mat3(gsplat.rot);
             mat3 S = mat3(
                 vec3(gsplat.scale.x, 0.0, 0.0),
                 vec3(0.0, gsplat.scale.y, 0.0),
-                vec3(0.0, 0.0, gsplat.scale.z)
+                vec3(0.0, 0.0, 0.0)
             );
 
-            vec3 new_origin = origin + direction * info.tmin;
+            vec3 new_origin = origin;
             vec3 new_direction;
 
             float scatter_pdf_over_ray_pdf;
@@ -379,7 +311,7 @@ vulkano_shaders::shader! {
                         murmur3_finalizef(murmur3_combine(seed, 2))
                     ),
                     // align it with the normal of the object we hit
-                    info.hit_coords
+                    ics
                 );
 
                 // for lambertian surfaces, the scatter pdf and the ray sampling pdf are the same
@@ -390,7 +322,6 @@ vulkano_shaders::shader! {
                 scatter_pdf_over_ray_pdf = 1.0;
 
                 new_direction = direction;
-                new_origin = origin + direction * info.tmax;
                 reflectivity = vec3(1.0);
                 emissivity = vec3(0.0);
             }
@@ -443,7 +374,7 @@ vulkano_shaders::shader! {
     
                 uint current_bounce;
                 for (current_bounce = 0; current_bounce < MAX_BOUNCES; current_bounce++) {
-                    IntersectionInfo intersection_info = getIntersectionInfo(origin, direction, 0xFFFFFFFF, 0xFFFFFFFF);
+                    IntersectionInfo intersection_info = getIntersectionInfo(origin, direction);
                     BounceInfo bounce_info = doBounce(current_bounce, origin, direction, intersection_info, murmur3_combine(sample_seed, current_bounce));
                     bounce_emissivity[current_bounce] = bounce_info.emissivity;
                     bounce_reflectivity[current_bounce] = bounce_info.reflectivity;

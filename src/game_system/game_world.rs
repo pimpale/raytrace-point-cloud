@@ -8,7 +8,6 @@ use nalgebra::Point3;
 use nalgebra::Vector3;
 
 use threadpool::ThreadPool;
-use vulkano::acceleration_structure::AabbPositions;
 use vulkano::command_buffer::allocator::StandardCommandBufferAllocator;
 use vulkano::descriptor_set::allocator::StandardDescriptorSetAllocator;
 use vulkano::device::DeviceOwned;
@@ -24,10 +23,11 @@ use crate::game_system::scene_manager::SceneManager;
 use crate::render_system::interactive_rendering;
 use crate::render_system::scene::Scene;
 use crate::render_system::vertex::GaussianSplat;
+use crate::render_system::vertex::Vertex3D;
 
 pub struct EntityCreationData {
     // mesh (untransformed)
-    pub mesh: Vec<(AabbPositions, GaussianSplat)>,
+    pub mesh: Vec<([Vertex3D; 6], GaussianSplat)>,
     // initial transformation
     // position and rotation in space
     pub isometry: Isometry3<f32>,
@@ -35,7 +35,7 @@ pub struct EntityCreationData {
 
 pub struct Entity {
     // mesh (untransformed)
-    pub mesh: Vec<(AabbPositions, GaussianSplat)>,
+    pub mesh: Vec<([Vertex3D; 6], GaussianSplat)>,
     // transformation from origin
     pub isometry: Isometry3<f32>,
 }

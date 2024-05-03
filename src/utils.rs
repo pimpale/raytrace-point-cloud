@@ -83,6 +83,21 @@ pub fn polyline(
     vertexes
 }
 
+pub fn xy_quad(loc: Point3<f32>, t_u: Vector3<f32>, t_v: Vector3<f32>, t: u32) -> [Vertex3D; 6] {
+    let v00 = loc - t_u * 0.5 - t_v * 0.5;
+    let v10 = loc + t_u * 0.5 - t_v * 0.5;
+    let v01 = loc - t_u * 0.5 + t_v * 0.5;
+    let v11 = loc + t_u * 0.5 + t_v * 0.5;
+    [
+        Vertex3D::new2(v01.into(), t, [0.0, 0.0]),
+        Vertex3D::new2(v10.into(), t, [1.0, 1.0]),
+        Vertex3D::new2(v00.into(), t, [0.0, 1.0]),
+        Vertex3D::new2(v01.into(), t, [0.0, 0.0]),
+        Vertex3D::new2(v11.into(), t, [1.0, 0.0]),
+        Vertex3D::new2(v10.into(), t, [1.0, 1.0]),
+    ]
+}
+
 pub fn cuboid(loc: Point3<f32>, dims: Vector3<f32>) -> Vec<Vertex3D> {
     let fx = loc[0] - 0.5 * dims[0];
     let fy = loc[1] - 0.5 * dims[1];
@@ -239,6 +254,10 @@ impl ply_rs::ply::PropertyAccess for PointCloudPoint {
             }
         }
 
+        fn sigmoid(x: f32) -> f32 {
+            1.0 / (1.0 + (-x).exp())
+        }
+
         match property.as_str() {
             "x" => self.position[0] = as_float(value),
             "y" => self.position[1] = -as_float(value),
@@ -250,10 +269,10 @@ impl ply_rs::ply::PropertyAccess for PointCloudPoint {
             "rot_1" => self.rot[1] = as_float(value),
             "rot_2" => self.rot[2] = as_float(value),
             "rot_3" => self.rot[3] = as_float(value),
-            "f_dc_0" => self.color[0] = as_float(value),
-            "f_dc_1" => self.color[1] = as_float(value),
-            "f_dc_2" => self.color[2] = as_float(value),
-            "opacity" => self.opacity = 1.0 / (1.0 + (-as_float(value)).exp()),
+            "f_dc_0" => self.color[0] = sigmoid(as_float(value)),
+            "f_dc_1" => self.color[1] = sigmoid(as_float(value)),
+            "f_dc_2" => self.color[2] = sigmoid(as_float(value)),
+            "opacity" => self.opacity = sigmoid(as_float(value)),
             _ => {}
         }
     }

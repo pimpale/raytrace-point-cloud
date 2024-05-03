@@ -1,5 +1,5 @@
 use vulkano::{
-    acceleration_structure::AabbPositions, buffer::BufferContents,
+    buffer::BufferContents,
     pipeline::graphics::vertex_input::Vertex,
 };
 
@@ -8,19 +8,26 @@ use vulkano::{
 pub struct Vertex3D {
     #[format(R32G32B32_SFLOAT)]
     pub position: [f32; 3],
-    #[format(R32G32B32_SFLOAT)]
-    pub tuv: [f32; 3],
+    #[format(R32_UINT)]
+    pub t: u32,
+    #[format(R32G32_SFLOAT)]
+    pub uv: [f32; 2],
 }
 
 impl Vertex3D {
-    pub fn new(position: [f32; 3], tuv: [f32; 3]) -> Self {
-        Self { position, tuv }
+    pub fn new(position: [f32; 3], tuv: [f32; 3]) -> Vertex3D {
+        Vertex3D {
+            position,
+            t: tuv[2] as u32,
+            uv: [tuv[0], tuv[1]],
+        }
     }
 
-    pub fn new2(position: [f32; 3], t: u32, uv: [f32; 2]) -> Self {
-        Self {
+    pub fn new2(position: [f32; 3], t: u32, uv: [f32; 2]) -> Vertex3D {
+        Vertex3D {
             position,
-            tuv: [t as f32, uv[0], uv[1]],
+            t,
+            uv,
         }
     }
 }
@@ -37,13 +44,13 @@ pub struct InstanceData {
 #[repr(C)]
 pub struct GaussianSplat {
     pub rot: [f32; 4],
-    pub scale: [f32; 3],
     pub color: [f32; 3],
     pub opacity: f32,
+    pub scale: [f32; 2],
 }
 
 impl GaussianSplat {
-    pub fn new(rot: [f32; 4], scale: [f32; 3], color: [f32; 3], opacity: f32) -> Self {
+    pub fn new(rot: [f32; 4], scale: [f32; 2], color: [f32; 3], opacity: f32) -> Self {
         Self {
             rot,
             scale,

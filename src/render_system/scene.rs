@@ -7,31 +7,19 @@ use std::{
 use nalgebra::{Isometry3, Matrix3x4, Matrix4};
 use vulkano::{
     acceleration_structure::{
-        AabbPositions, AccelerationStructure, AccelerationStructureBuildGeometryInfo,
-        AccelerationStructureBuildRangeInfo, AccelerationStructureBuildSizesInfo,
-        AccelerationStructureBuildType, AccelerationStructureCreateInfo,
-        AccelerationStructureGeometries, AccelerationStructureGeometryAabbsData,
-        AccelerationStructureGeometryInstancesData, AccelerationStructureGeometryInstancesDataType,
-        AccelerationStructureInstance, AccelerationStructureType, BuildAccelerationStructureFlags,
-        BuildAccelerationStructureMode, GeometryFlags,
-    },
-    buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer},
-    command_buffer::{
+        AccelerationStructure, AccelerationStructureBuildGeometryInfo, AccelerationStructureBuildRangeInfo, AccelerationStructureBuildSizesInfo, AccelerationStructureBuildType, AccelerationStructureCreateInfo, AccelerationStructureGeometries, AccelerationStructureGeometryAabbsData, AccelerationStructureGeometryInstancesData, AccelerationStructureGeometryInstancesDataType, AccelerationStructureGeometryTrianglesData, AccelerationStructureInstance, AccelerationStructureType, BuildAccelerationStructureFlags, BuildAccelerationStructureMode, GeometryFlags
+    }, buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer}, command_buffer::{
         allocator::StandardCommandBufferAllocator, AutoCommandBufferBuilder, CommandBufferUsage,
         CopyBufferInfo, PrimaryAutoCommandBuffer, PrimaryCommandBufferAbstract,
-    },
-    device::Queue,
-    memory::allocator::{AllocationCreateInfo, MemoryAllocator, MemoryTypeFilter},
-    sync::GpuFuture,
-    DeviceSize, Packed24_8,
+    }, device::Queue, memory::allocator::{AllocationCreateInfo, MemoryAllocator, MemoryTypeFilter}, pipeline::graphics::vertex_input::Vertex, sync::GpuFuture, DeviceSize, Packed24_8
 };
 
-use super::vertex::{GaussianSplat, InstanceData};
+use super::vertex::{GaussianSplat, InstanceData, Vertex3D};
 
 pub struct Object {
     isometry: Isometry3<f32>,
     gsplat_buffer: Subbuffer<[GaussianSplat]>,
-    vertex_buffer: Subbuffer<[AabbPositions]>,
+    vertex_buffer: Subbuffer<[Vertex3D]>,
     blas: Arc<AccelerationStructure>,
 }
 
@@ -98,7 +86,7 @@ where
     pub fn add_object(
         &mut self,
         key: K,
-        object: &Vec<(AabbPositions, GaussianSplat)>,
+        object: &Vec<([Vertex3D; 6], GaussianSplat)>,
         isometry: Isometry3<f32>,
     ) {
         if object.len() == 0 {
@@ -281,10 +269,12 @@ fn blas_vertex_buffer(
     command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
     transfer_queue: Arc<Queue>,
     memory_allocator: Arc<dyn MemoryAllocator>,
-    objects: &[(AabbPositions, GaussianSplat)],
-) -> (Subbuffer<[AabbPositions]>, Subbuffer<[GaussianSplat]>) {
+    objects: &[([Vertex3D; 6], GaussianSplat)],
+) -> (Subbuffer<[Vertex3D]>, Subbuffer<[GaussianSplat]>) {
     let n_vertexes = objects.len() as u64;
-    let (vertexes, gsplats): (Vec<_>, Vec<_>) = objects.iter().cloned().unzip();
+    let (vertex_arrs, gsplats): (Vec<_>, Vec<_>) = objects.iter().cloned().unzip();
+
+    let vertexes: Vec<_> = vertex_arrs.into_iter().flatten().collect();
 
     let vertex_buffer_tmp = Buffer::from_iter(
         memory_allocator.clone(),
@@ -450,14 +440,21 @@ fn create_top_level_acceleration_structure(
 fn create_bottom_level_acceleration_structure_aabb(
     builder: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
     memory_allocator: Arc<dyn MemoryAllocator>,
-    aabb_buffer: &Subbuffer<[AabbPositions]>,
+    vertex_buffer: &Subbuffer<[Vertex3D]>,
 ) -> Arc<AccelerationStructure> {
-    let primitive_count = aabb_buffer.len() as u32;
-    let aabbs = AccelerationStructureGeometryAabbsData {
+    let description = Vertex3D::per_vertex();
+
+    let primitive_count = vertex_buffer.len() as u32/3;
+    let triangles = AccelerationStructureGeometryTrianglesData {
         flags: GeometryFlags::OPAQUE,
-        data: Some(aabb_buffer.clone().into_bytes()),
-        stride: std::mem::size_of::<AabbPositions>() as u32,
-        ..AccelerationStructureGeometryAabbsData::default()
+        vertex_data: Some(vertex_buffer.clone().into_bytes()),
+        vertex_stride: description.stride,
+        max_vertex: vertex_buffer.len() as _,
+        index_data: None,
+        transform_data: None,
+        ..AccelerationStructureGeometryTrianglesData::new(
+            description.members.get("position").unwrap().format,
+        )
     };
     let build_range_info = AccelerationStructureBuildRangeInfo {
         primitive_count,
@@ -469,8 +466,8 @@ fn create_bottom_level_acceleration_structure_aabb(
     let build_info = AccelerationStructureBuildGeometryInfo {
         flags: BuildAccelerationStructureFlags::PREFER_FAST_TRACE,
         mode: BuildAccelerationStructureMode::Build,
-        ..AccelerationStructureBuildGeometryInfo::new(AccelerationStructureGeometries::Aabbs(vec![
-            aabbs,
+        ..AccelerationStructureBuildGeometryInfo::new(AccelerationStructureGeometries::Triangles(vec![
+            triangles,
         ]))
     };
 

@@ -260,15 +260,16 @@ impl ply_rs::ply::PropertyAccess for PointCloudPoint {
 
         match property.as_str() {
             "x" => self.position[0] = as_float(value),
-            "y" => self.position[1] = -as_float(value),
+            "y" => self.position[1] = as_float(value),
             "z" => self.position[2] = as_float(value),
             "scale_0" => self.scale[0] = as_float(value).exp(),
             "scale_1" => self.scale[1] = as_float(value).exp(),
             "scale_2" => self.scale[2] = as_float(value).exp(),
-            "rot_0" => self.rot[0] = as_float(value),
-            "rot_1" => self.rot[1] = as_float(value),
-            "rot_2" => self.rot[2] = as_float(value),
-            "rot_3" => self.rot[3] = as_float(value),
+            // w x y z
+            "rot_0" => self.rot[3] = as_float(value),
+            "rot_1" => self.rot[0] = as_float(value),
+            "rot_2" => self.rot[1] = as_float(value),
+            "rot_3" => self.rot[2] = as_float(value),
             "f_dc_0" => self.color[0] = sigmoid(as_float(value)),
             "f_dc_1" => self.color[1] = sigmoid(as_float(value)),
             "f_dc_2" => self.color[2] = sigmoid(as_float(value)),

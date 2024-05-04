@@ -82,7 +82,7 @@ impl SphericalCamera {
         SphericalCamera {
             root_pos: Point3::default(),
             root_rot: UnitQuaternion::identity(),
-            worldup: Vector3::new(0.0, -1.0, 0.0),
+            worldup: Vector3::new(0.0, 1.0, 0.0),
             pitch: 0.0,
             yaw: 0.0,
             offset: 0.0,

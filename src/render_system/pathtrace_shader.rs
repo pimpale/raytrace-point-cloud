@@ -281,7 +281,7 @@ vulkano_shaders::shader! {
                 t_v = tri[1]-tri[2];
             }
 
-            GaussianSplat gsplat = GaussianSplat(id.gaussian_splat_buffer_addr)[info.prim_index/6];
+            GaussianSplat gsplat = GaussianSplat(id.gaussian_splat_buffer_addr)[info.prim_index/2];
 
             // vector from gaussian center to the hit point
             vec3 hit_delta = intersection_point - gsplat_position;
@@ -299,7 +299,8 @@ vulkano_shaders::shader! {
             float scatter_pdf_over_ray_pdf;
 
             vec3 reflectivity = gsplat.color;
-            float opacity =  float(gaussian_value > 0.1);
+            // float opacity =  float(gaussian_value > 0.1);
+            float opacity = gsplat.opacity * gaussian_value;
             vec3 emissivity = vec3(100*float(info.instance_index == 0));
 
             // decide whether to do specular (0), transmissive (1), or lambertian (2) scattering
@@ -348,7 +349,7 @@ vulkano_shaders::shader! {
         }    
 
         const uint SAMPLES_PER_PIXEL = 1;
-        const uint MAX_BOUNCES = 8;
+        const uint MAX_BOUNCES = 32;
 
         void main() {
             Camera camera = push_constants.camera;

@@ -100,9 +100,12 @@ fn build_scene(
                 let t_v = r * Vector3::new(0.0, s[1], 0.0);
 
                 let vertexes = utils::xy_quad(p, t_u, t_v, 0xFFFFFF);
-                
+
                 // return pair of mesh and GaussianSplat
-                (vertexes, GaussianSplat::new(p.into(), r.coords.into(), s, color, 1.0))
+                (
+                    vertexes,
+                    GaussianSplat::new(p.into(), r.coords.into(), s, color, 1.0),
+                )
             }],
             isometry: Isometry3::translation(0.0, 0.0, 0.0),
         },
@@ -142,13 +145,17 @@ fn build_scene(
 
     // add teapot
     let path = path::Path::new("./data/dtu_scan105_2d.ply");
+    // let path = path::Path::new("./data/bicycle_3dgs.ply");
     let parser = ply_rs::parser::Parser::<utils::PointCloudPoint>::new();
     let point_cloud = parser
         .read_ply(&mut std::fs::File::open(path).unwrap())
         .unwrap();
 
+    let transform_matrix = Matrix3::identity();
+
     let vertexes = point_cloud.payload["vertex"]
         .par_iter()
+        .step_by(2)
         .cloned()
         .map(
             |PointCloudPoint {
@@ -158,16 +165,29 @@ fn build_scene(
                  color,
                  opacity,
              }| {
-                let r: Matrix3<f32> = UnitQuaternion::new_normalize(rot).into();
-                let scale = 2.0*Vector2::new(scale[0], scale[1]);
+                let rot_orig: Matrix3<f32> = UnitQuaternion::new_normalize(rot).into();
+                let position_t = transform_matrix * position;
+                // TODO: fixme
+                let rot_t = UnitQuaternion::new_normalize(rot);
+                let t_u: Vector3<f32> =
+                    transform_matrix * rot_orig * Vector3::new(scale[0], 0.0, 0.0);
+                let t_v: Vector3<f32> =
+                    transform_matrix * rot_orig * Vector3::new(0.0, scale[1], 0.0);
+                const TANG_VECT_SCALE: f32 = 4.0;
                 (
                     utils::xy_quad(
-                        position,
-                        r * Vector3::new(scale[0], 0.0, 0.0),
-                        r * Vector3::new(0.0, scale[1], 0.0),
+                        position_t,
+                        TANG_VECT_SCALE * t_u,
+                        TANG_VECT_SCALE * t_v,
                         0xFFFFFF,
                     ),
-                    GaussianSplat::new(position.into(), rot.coords.into(), scale.into(), color, opacity),
+                    GaussianSplat::new(
+                        position_t.into(),
+                        rot_t.coords.into(),
+                        [t_u.norm(), t_v.norm()],
+                        color,
+                        opacity,
+                    ),
                 )
             },
         )

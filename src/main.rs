@@ -2,7 +2,9 @@ use std::path;
 use std::sync::Arc;
 
 use game_system::game_world::{EntityCreationData, GameWorld};
-use nalgebra::{Isometry3, Matrix3, Point3, UnitQuaternion, Vector2, Vector3};
+use nalgebra::{
+    Isometry3, Matrix3, Point3, Rotation3, Similarity3, UnitQuaternion, Vector2, Vector3,
+};
 
 use statrs::distribution::{ContinuousCDF, Normal};
 use utils::PointCloudPoint;
@@ -93,7 +95,7 @@ fn build_scene(
             mesh: vec![{
                 let p = Point3::new(0.0, 0.0, 0.0);
                 let r = UnitQuaternion::identity();
-                let s = [0.01, 0.01];
+                let s = [0.5, 0.5];
                 let color = [0.5, 0.5, 0.5];
 
                 let t_u = r * Vector3::new(s[0], 0.0, 0.0);
@@ -151,11 +153,16 @@ fn build_scene(
         .read_ply(&mut std::fs::File::open(path).unwrap())
         .unwrap();
 
-    let transform_matrix = Matrix3::identity();
+    //let transform_matrix = 2.0f32*Matrix3::identity();
+    let transform_similarity = Similarity3::from_parts(
+        Vector3::new(0.0, 0.0, 0.0).into(),
+        UnitQuaternion::from_euler_angles(0.0, 0.5, 0.0),
+        2.0,
+    );
 
     let vertexes = point_cloud.payload["vertex"]
         .par_iter()
-        .step_by(2)
+        // .step_by(2)
         .cloned()
         .map(
             |PointCloudPoint {
@@ -166,13 +173,13 @@ fn build_scene(
                  opacity,
              }| {
                 let rot_orig: Matrix3<f32> = UnitQuaternion::new_normalize(rot).into();
-                let position_t = transform_matrix * position;
+                let position_t = transform_similarity * position;
                 // TODO: fixme
                 let rot_t = UnitQuaternion::new_normalize(rot);
                 let t_u: Vector3<f32> =
-                    transform_matrix * rot_orig * Vector3::new(scale[0], 0.0, 0.0);
+                    transform_similarity * (rot_orig * Vector3::new(scale[0], 0.0, 0.0));
                 let t_v: Vector3<f32> =
-                    transform_matrix * rot_orig * Vector3::new(0.0, scale[1], 0.0);
+                    transform_similarity * (rot_orig * Vector3::new(0.0, scale[1], 0.0));
                 const TANG_VECT_SCALE: f32 = 4.0;
                 (
                     utils::xy_quad(

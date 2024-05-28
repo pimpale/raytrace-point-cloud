@@ -106,37 +106,6 @@ vulkano_shaders::shader! {
             return floatConstruct(murmur3_finalize(h));
         }
 
-        // https://gist.github.com/pezcode/150eb97dd41b67b611d0de7bae273e98
-        mat3 quat_to_mat3(vec4 q) {
-            // multiply by sqrt(2) to get rid of all the 2.0 factors in the matrix
-            q *= 1.414214;
-        
-            float xx = q.x*q.x;
-            float xy = q.x*q.y;
-            float xz = q.x*q.z;
-            float xw = q.x*q.w;
-        
-            float yy = q.y*q.y;
-            float yz = q.y*q.z;
-            float yw = q.y*q.w;
-        
-            float zz = q.z*q.z;
-            float zw = q.z*q.w;
-        
-            return mat3(
-                1.0 - yy - zz,
-                xy + zw,
-                xz - yw,
-                
-                xy - zw,
-                1.0 - xx - zz,
-                yz + xw,
-        
-                xz + yw,
-                yz - xw,
-                1.0 - xx - yy);
-        }
-
         vec3[3] triangleTransform(mat4x3 transform, vec3[3] tri) {
             return vec3[3](
                 transform * vec4(tri[0], 1.0),
@@ -189,6 +158,7 @@ vulkano_shaders::shader! {
             uint instance_index;
             uint prim_index;
             vec2 bary;
+            uint n_triangles;
         };
     
         IntersectionInfo getIntersectionInfo(vec3 origin, vec3 direction) {
@@ -198,7 +168,10 @@ vulkano_shaders::shader! {
             rayQueryInitializeEXT(
                 ray_query,
                 top_level_acceleration_structure,
-                gl_RayFlagsNoneEXT,//gl_RayFlagsCullBackFacingTrianglesEXT,
+                // gl_RayFlagsNoneEXT,
+                gl_RayFlagsOpaqueEXT,
+                // gl_RayFlagsNoOpaqueEXT,
+                // gl_RayFlagsCullBackFacingTrianglesEXT,
                 0xFF,
                 origin,
                 t_min,
@@ -206,8 +179,14 @@ vulkano_shaders::shader! {
                 t_max
             );
     
+
             // trace ray
-            while (rayQueryProceedEXT(ray_query));
+            uint n_triangles = 0;
+            while (rayQueryProceedEXT(ray_query)) {
+                if(rayQueryGetIntersectionTypeEXT(ray_query, false) == gl_RayQueryCandidateIntersectionTriangleEXT) {
+                    n_triangles++;
+                }
+            };
             
             // if miss return miss
             if(rayQueryGetIntersectionTypeEXT(ray_query, true) == gl_RayQueryCommittedIntersectionNoneEXT) {
@@ -215,14 +194,16 @@ vulkano_shaders::shader! {
                     true,
                     0,
                     0,
-                    vec2(0.0)
+                    vec2(0.0),
+                    n_triangles
                 );
             } else {
                 return IntersectionInfo(
                     false,
                     rayQueryGetIntersectionInstanceIdEXT(ray_query, true),
                     rayQueryGetIntersectionPrimitiveIndexEXT(ray_query, true),
-                    rayQueryGetIntersectionBarycentricsEXT(ray_query, true)
+                    rayQueryGetIntersectionBarycentricsEXT(ray_query, true),
+                    n_triangles
                 );
             }
         }
@@ -238,7 +219,7 @@ vulkano_shaders::shader! {
 
         BounceInfo doBounce(uint current_bounce, vec3 origin, vec3 direction, IntersectionInfo info, uint seed) {
             if(info.miss) {
-                vec3 sky_emissivity = vec3(5.0);
+                vec3 sky_emissivity = vec3(2.0);
                 vec3 sky_reflectivity = vec3(0.0);
                 return BounceInfo(
                     sky_emissivity,
@@ -349,7 +330,7 @@ vulkano_shaders::shader! {
         }    
 
         const uint SAMPLES_PER_PIXEL = 1;
-        const uint MAX_BOUNCES = 32;
+        const uint MAX_BOUNCES = 64;
 
         void main() {
             Camera camera = push_constants.camera;
@@ -380,14 +361,26 @@ vulkano_shaders::shader! {
                 vec3 direction = normalize((uv.x + jitter.x) * camera.right * aspect + (uv.y + jitter.y) * camera.up + camera.front);
     
                 uint current_bounce;
+                uint last_n_triangles = 0;
+                uint transmissive_bounces = 0;
                 for (current_bounce = 0; current_bounce < MAX_BOUNCES; current_bounce++) {
                     IntersectionInfo intersection_info = getIntersectionInfo(origin, direction);
+                    last_n_triangles = intersection_info.n_triangles;
                     BounceInfo bounce_info = doBounce(current_bounce, origin, direction, intersection_info, murmur3_combine(sample_seed, current_bounce));
                     bounce_emissivity[current_bounce] = bounce_info.emissivity;
                     bounce_reflectivity[current_bounce] = bounce_info.reflectivity;
                     bounce_scatter_pdf_over_ray_pdf[current_bounce] = bounce_info.scatter_pdf_over_ray_pdf;
     
                     if(bounce_info.miss) {
+                        current_bounce++;
+                        break;
+                    }
+
+                    if(bounce_info.new_direction == direction) {
+                        transmissive_bounces++;
+                    } else {
+                        current_bounce++;
+                        bounce_emissivity[current_bounce] = vec3(2.0);
                         current_bounce++;
                         break;
                     }
@@ -401,6 +394,17 @@ vulkano_shaders::shader! {
                 for(int i = int(current_bounce)-1; i >= 0; i--) {
                     sample_color = bounce_emissivity[i] + (sample_color * bounce_reflectivity[i] * bounce_scatter_pdf_over_ray_pdf[i]); 
                 }
+                if(push_constants.frame % 50 < 12)
+                sample_color = vec3(
+                    transmissive_bounces/float(64)
+                );
+                // sample_color = vec3(
+                    //     current_bounce/float(MAX_BOUNCES),
+                    //     transmissive_bounces/float(MAX_BOUNCES),
+                    //     0.0
+                    // );
+                else if (push_constants.frame % 50 < 25)
+                    sample_color = vec3(last_n_triangles/float(200));
                 color += sample_color;
             }
         

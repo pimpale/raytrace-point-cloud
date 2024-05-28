@@ -3,26 +3,35 @@ use std::sync::Arc;
 
 use nalgebra::{Point3, Vector3};
 use vulkano::{
-    acceleration_structure::AccelerationStructure, buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer}, command_buffer::{
+    acceleration_structure::AccelerationStructure,
+    buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer},
+    command_buffer::{
         allocator::StandardCommandBufferAllocator, AutoCommandBufferBuilder, CommandBufferUsage,
         CopyBufferToImageInfo,
-    }, descriptor_set::{
+    },
+    descriptor_set::{
         allocator::StandardDescriptorSetAllocator, PersistentDescriptorSet, WriteDescriptorSet,
-    }, device::{
+    },
+    device::{
         physical::PhysicalDeviceType, Device, DeviceCreateInfo, DeviceExtensions, DeviceOwned,
         Features, Queue, QueueCreateInfo, QueueFlags,
-    }, format::Format, image::{Image, ImageUsage}, instance::Instance, memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, StandardMemoryAllocator}, pipeline::{
+    },
+    format::Format,
+    image::{Image, ImageUsage},
+    instance::Instance,
+    memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, StandardMemoryAllocator},
+    pipeline::{
         compute::ComputePipelineCreateInfo, layout::PipelineDescriptorSetLayoutCreateInfo,
         ComputePipeline, Pipeline, PipelineBindPoint, PipelineLayout,
         PipelineShaderStageCreateInfo,
-    }, swapchain::{self, Surface, Swapchain, SwapchainCreateInfo, SwapchainPresentInfo}, sync::{self, GpuFuture}, Validated, VulkanError
+    },
+    swapchain::{self, Surface, Swapchain, SwapchainCreateInfo, SwapchainPresentInfo},
+    sync::{self, GpuFuture},
+    Validated, VulkanError,
 };
 use winit::window::Window;
 
-use super::{
-    pathtrace_shader,
-    vertex::InstanceData,
-};
+use super::{pathtrace_shader, vertex::InstanceData};
 
 pub fn get_device_for_rendering_on(
     instance: Arc<Instance>,

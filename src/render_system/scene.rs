@@ -447,7 +447,7 @@ fn create_bottom_level_acceleration_structure_aabb(
 
     let primitive_count = vertex_buffer.len() as u32/3;
     let triangles = AccelerationStructureGeometryTrianglesData {
-        flags: GeometryFlags::OPAQUE,
+        flags: GeometryFlags::empty(),
         vertex_data: Some(vertex_buffer.clone().into_bytes()),
         vertex_stride: description.stride,
         max_vertex: vertex_buffer.len() as _,

@@ -162,7 +162,7 @@ fn build_scene(
 
     let vertexes = point_cloud.payload["vertex"]
         .par_iter()
-        // .step_by(2)
+        .step_by(2)
         .cloned()
         .map(
             |PointCloudPoint {
